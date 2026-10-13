@@ -1,0 +1,1632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Internal Crash Investigation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&family=Overpass+Mono:wght@400;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+html{-webkit-text-size-adjust:100%}body{margin:0}[hidden]{display:none!important}img{max-width:100%}
+
+/* Layout: a crash-report form — boxed cells with small caps labels under dark section bands; the diagram tab is a three-pane drafting table. */
+:root{
+  --paper:#eceff0; --sheet:#ffffff; --field:#fbfcfc; --ink:#151c20; --muted:#58656d; --rule:#c9d1d5; --rule-strong:#8d989e;
+  --accent:#0d6a4b; --accent-ink:#ffffff; --accent-soft:#dcefe6;
+  --warn:#9a5b00; --warn-soft:#fdf0d6; --bad:#a3221b; --bad-soft:#fbe2df; --ok:#21734a; --ok-soft:#dff3e7;
+  --band:#1f2a30; --band-ink:#f1f4f5; --sub:#e3e8ea;
+  --ff:"Overpass","Segoe UI",system-ui,sans-serif; --fm:"Overpass Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0f1416; --sheet:#171e21; --field:#12181b; --ink:#e4eaec; --muted:#97a6ad; --rule:#2c373c; --rule-strong:#4b5a61;
+  --accent:#42b98a; --accent-ink:#06150f; --accent-soft:#163428;
+  --warn:#e3a640; --warn-soft:#33270f; --bad:#f07a70; --bad-soft:#3a1916; --ok:#5fcf93; --ok-soft:#14301f;
+  --band:#26323a; --band-ink:#e9eef0; --sub:#1f282c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#0f1416; --sheet:#171e21; --field:#12181b; --ink:#e4eaec; --muted:#97a6ad; --rule:#2c373c; --rule-strong:#4b5a61;
+  --accent:#42b98a; --accent-ink:#06150f; --accent-soft:#163428;
+  --warn:#e3a640; --warn-soft:#33270f; --bad:#f07a70; --bad-soft:#3a1916; --ok:#5fcf93; --ok-soft:#14301f;
+  --band:#26323a; --band-ink:#e9eef0; --sub:#1f282c; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--paper);color:var(--ink);font-family:var(--ff);font-size:14px;line-height:1.4}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* top bar */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--band);color:var(--band-ink);display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 16px}
+.brand{display:flex;flex-direction:column;line-height:1.1;min-width:0}
+.brand b{font-weight:800;letter-spacing:.02em;font-size:15px}
+.brand span{font-family:var(--fm);font-size:12px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .grow{flex:1}
+.savestate{font-size:12px;opacity:.85;font-family:var(--fm);white-space:nowrap}
+.btn{border:1px solid var(--rule-strong);background:var(--sheet);color:var(--ink);border-radius:4px;padding:6px 11px;font-weight:600;font-size:13px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.ghost{background:transparent;color:inherit;border-color:rgba(255,255,255,.35)}
+.bar .btn.ghost:hover{border-color:#fff}
+.btn.sm{padding:3px 8px;font-size:12px}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+
+/* tabs */
+.tabs{display:flex;gap:2px;overflow-x:auto;padding:0 16px;background:var(--sheet);border-bottom:1px solid var(--rule);position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--barh,56px));z-index:15;scrollbar-width:thin}
+.tabs button{border:0;background:none;padding:11px 12px 9px;font-weight:700;font-size:13px;color:var(--muted);border-bottom:3px solid transparent;white-space:nowrap;letter-spacing:.02em}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs button:hover{color:var(--ink)}
+
+main{padding-block:18px 60px;padding-inline:16px;max-width:1180px;margin:0 auto}
+main.wide{max-width:none;padding-block:0;padding-inline:0}
+
+/* form sheets */
+.sheet{background:var(--sheet);border:1px solid var(--rule-strong);margin-bottom:18px}
+.band{background:var(--band);color:var(--band-ink);padding:6px 10px;font-weight:800;font-size:12px;letter-spacing:.09em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.band .grow{flex:1}
+.band .btn{background:transparent;color:inherit;border-color:rgba(255,255,255,.35)}
+.subh{background:var(--sub);padding:5px 10px;font-weight:700;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);border-top:1px solid var(--rule)}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.cell{border-top:1px solid var(--rule);border-right:1px solid var(--rule);padding:5px 8px 6px;min-width:0;display:flex;flex-direction:column;gap:2px;background:var(--sheet)}
+.cell:focus-within{background:var(--accent-soft)}
+.s2{grid-column:span 2}.s3{grid-column:span 3}.s4{grid-column:1/-1}
+.cell label,.cell .lbl{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.cell input,.cell select,.cell textarea{width:100%;border:0;background:transparent;padding:2px 0;font-size:14px;min-height:26px;border-radius:2px}
+.cell input:focus,.cell select:focus,.cell textarea:focus{outline:none}
+.cell textarea{resize:vertical;line-height:1.45}
+.cell select{appearance:auto;cursor:pointer}
+.cell.calc output{font-family:var(--fm);font-weight:600;padding-top:3px}
+.cell .hint{text-transform:none;letter-spacing:0;font-weight:400;margin-left:4px}
+.mono{font-family:var(--fm)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;padding:3px 0}
+.chip{border:1px solid var(--rule-strong);background:var(--field);border-radius:3px;padding:2px 8px;font-size:12.5px;font-weight:600}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.mlist{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:2px 0}
+.mrow{display:flex;align-items:center;gap:6px;width:100%}
+.mrow input{flex:1;border-bottom:1px dashed var(--rule)!important}
+.mno{font-family:var(--fm);font-size:12px;color:var(--muted);min-width:1.6em}
+.addrow{display:flex;gap:8px;flex-wrap:wrap;margin:-6px 0 18px}
+
+/* determination strip */
+.det{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0;border:1px solid var(--rule-strong);background:var(--sheet);margin-bottom:18px}
+.det>div{padding:10px 12px;border-right:1px solid var(--rule);display:flex;flex-direction:column;gap:3px;min-width:0}
+.det .k{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.det .v{font-weight:800;font-size:15px}
+.det .n{font-size:12.5px;color:var(--muted)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.bad{background:var(--bad-soft);color:var(--bad)}.pill.mut{background:var(--sub);color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:75ch}
+
+/* drawer */
+.drawer{position:fixed;inset:0;z-index:50;display:flex;justify-content:flex-start;background:rgba(10,14,16,.45)}
+.drawer .panel{background:var(--sheet);width:min(440px,100%);height:100%;overflow:auto;padding-block:calc(env(safe-area-inset-top,0px) + 14px) 20px;padding-inline:16px;display:flex;flex-direction:column;gap:12px;border-right:1px solid var(--rule-strong)}
+.drawer h2{margin:0;font-size:16px;font-weight:800}
+.caselist{display:flex;flex-direction:column;border:1px solid var(--rule)}
+.caserow{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 12px;border-bottom:1px solid var(--rule);text-align:left;background:var(--sheet);border-left:3px solid transparent;width:100%;border-top:0;border-right:0}
+.caserow:hover{background:var(--sub)}
+.caserow.cur{border-left-color:var(--accent);background:var(--accent-soft)}
+.caserow .no{font-family:var(--fm);font-weight:600}
+.caserow .meta{grid-column:1/-1;font-size:12.5px;color:var(--muted)}
+.empty{padding:20px;color:var(--muted);text-align:center}
+
+/* diagram */
+.dg{display:grid;grid-template-columns:168px minmax(0,1fr) 290px;height:calc(100dvh - var(--barh,56px) - var(--tabh,42px) - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));min-height:520px}
+.pal{border-right:1px solid var(--rule-strong);background:var(--sheet);overflow:auto;padding:8px}
+.pal h3,.props h3{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:10px 2px 6px;font-weight:800}
+.pal h3:first-child,.props h3:first-child{margin-top:2px}
+.palgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.pitem{border:1px solid var(--rule);background:var(--field);border-radius:4px;padding:4px 2px 3px;display:flex;flex-direction:column;align-items:center;gap:1px;font-size:10.5px;font-weight:600;color:var(--muted);touch-action:manipulation}
+.pitem:hover{border-color:var(--accent);color:var(--ink)}
+.pitem svg{width:56px;height:30px}
+.stage{position:relative;overflow:hidden;background:#dfe5d8;min-width:0}
+.stage svg#scene{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+.stage svg#scene.panning{cursor:grabbing}
+.ovl{position:absolute;pointer-events:none;color:#1d2328;font-family:Arial,Helvetica,sans-serif}
+.ovl.compass{top:12px;right:12px}
+.ovl.scale{left:12px;bottom:12px;font-size:11px;font-weight:700}
+.tools{position:absolute;left:10px;top:10px;display:flex;gap:4px;flex-wrap:wrap;max-width:calc(100% - 80px)}
+.tools .btn{background:#fff;color:#1d2328;border-color:#9aa4a9;padding:4px 9px;font-size:12px}
+.tools .btn[disabled]{opacity:.4}
+.props{border-left:1px solid var(--rule-strong);background:var(--sheet);overflow:auto;padding:10px 12px 20px}
+.frow{display:grid;grid-template-columns:96px minmax(0,1fr);gap:6px;align-items:center;margin-bottom:6px}
+.frow label{font-size:12px;color:var(--muted);font-weight:600}
+.frow input[type=text],.frow input[type=number],.frow select{width:100%;border:1px solid var(--rule);background:var(--field);padding:4px 6px;border-radius:3px;min-width:0}
+.frow input[type=range]{width:100%}
+.btnrow{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.presets{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.presets .btn{justify-content:center;font-size:12px;padding:5px 4px}
+.presets .btn.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.leg{border:1px solid var(--rule);border-radius:4px;padding:7px 8px 4px;margin-bottom:8px;background:var(--field)}
+.leg.off{opacity:.6}
+.leg .lh{display:flex;align-items:center;gap:6px;font-weight:700;font-size:12.5px;margin-bottom:6px}
+.leg .lh .grow{flex:1}
+.leg .g2{display:grid;grid-template-columns:1fr 1fr;gap:5px 6px}
+.leg .g2 label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);font-weight:600;gap:1px;min-width:0}
+.leg .g2 input,.leg .g2 select{border:1px solid var(--rule);background:var(--sheet);padding:3px 5px;border-radius:3px;width:100%;min-width:0;color:var(--ink)}
+.leg .g2 .chk{flex-direction:row;align-items:center;gap:5px}
+.leg .g2 .chk input{width:auto}
+.turnrow{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:2px}
+.leg .g2 .turnrow .btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.leg .g2 .tlen{flex-direction:row;align-items:center;gap:6px;width:100%}
+.leg .g2 .tlen input{width:80px}
+.dz{padding:12px;border-top:1px solid var(--rule);display:flex;flex-direction:column;gap:6px;border:2px dashed transparent}
+.dz.over{border-color:var(--accent);background:var(--accent-soft)}
+.dzrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.dzrow label{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.dzrow select{border:1px solid var(--rule);background:var(--field);padding:5px 6px;border-radius:3px;max-width:100%}
+.dzhint{margin:0;font-size:12.5px;color:var(--muted)}
+.doc{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:12px;padding:10px;border-top:1px solid var(--rule);align-items:start}
+.dthumb{width:64px;height:64px;border:1px solid var(--rule);border-radius:4px;background:var(--field);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.dthumb img{width:100%;height:100%;object-fit:cover}
+.ficon{font-family:var(--fm);font-weight:600;font-size:12px;color:var(--muted)}
+.dname{font-weight:700;overflow-wrap:anywhere}
+.dname-in{font-weight:700;border:0;border-bottom:1px dashed var(--rule);background:transparent;padding:2px 0;width:100%}
+.dmeta{font-size:12px;color:var(--muted);margin:2px 0 6px}
+.dfields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px}
+.dfields label{display:flex;flex-direction:column;gap:2px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);min-width:0}
+.dfields .wide{grid-column:1/-1}
+.dfields input,.dfields select{border:1px solid var(--rule);background:var(--field);padding:4px 6px;border-radius:3px;font-size:13.5px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink);min-width:0;width:100%}
+.dact{display:flex;flex-direction:column;gap:5px;align-items:stretch}
+.pwrow{display:flex;flex-direction:column;gap:3px;font-size:12px;font-weight:700;color:var(--muted)}
+.pwrow input{border:1px solid var(--rule-strong);background:var(--field);padding:6px 8px;border-radius:4px;font-weight:400;color:var(--ink)}
+@media (max-width:600px){.doc{grid-template-columns:48px minmax(0,1fr)}.dthumb{width:48px;height:48px}.dact{grid-column:1/-1;flex-direction:row;flex-wrap:wrap}.dfields{grid-template-columns:minmax(0,1fr)}}
+.swatches{display:flex;gap:5px;flex-wrap:wrap}
+.sw{width:24px;height:24px;border-radius:4px;border:2px solid var(--sheet);box-shadow:0 0 0 1px var(--rule-strong)}
+.sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
+.kbd{font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:12px}
+.dnotes{width:100%;border:1px solid var(--rule);background:var(--field);padding:6px;border-radius:3px;min-height:80px;resize:vertical}
+.confirm{display:inline-flex;gap:5px;align-items:center}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 20px);transform:translateX(-50%);background:var(--band);color:var(--band-ink);padding:9px 16px;border-radius:5px;font-weight:600;z-index:60;max-width:calc(100% - 32px);font-size:13px}
+
+@media (max-width:900px){
+  .dg{grid-template-columns:1fr;height:auto}
+  .pal{border-right:0;border-bottom:1px solid var(--rule-strong);overflow-x:auto;overflow-y:hidden;display:flex;gap:12px;padding:6px 10px}
+  .pal section{flex:none}
+  .palgrid{grid-template-columns:repeat(6,58px)}
+  .stage{height:62vh}
+  .props{border-left:0;border-top:1px solid var(--rule-strong)}
+}
+@media (max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.s3,.s4{grid-column:1/-1}}
+@media (max-width:440px){.grid{grid-template-columns:minmax(0,1fr)}.s2{grid-column:1/-1}.bar .btn .lbl-long{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+</head>
+<body>
+<header class="bar" id="bar">
+  <button class="btn ghost" id="openCases" aria-label="Open saved investigations">☰ <span class="lbl-long">Cases</span></button>
+  <div class="brand"><b>Internal Crash Investigation</b><span id="caseLine">New investigation</span></div>
+  <div class="grow"></div>
+  <span class="savestate" id="saveState">Not saved</span>
+  <button class="btn ghost" id="btnSave">Save</button>
+  <button class="btn ghost" id="btnXlsx">Export Excel</button>
+  <button class="btn primary" id="btnPng">Export diagram</button>
+</header>
+<nav class="tabs" id="tabs" role="tablist"></nav>
+<main id="view"></main>
+<div id="drawerHost"></div>
+<div id="toastHost"></div>
+<input type="file" id="caseFile" accept=".json,application/json" hidden>
+<input type="file" id="docFile" multiple hidden>
+
+<script>
+/* ==========================================================================
+   FORM SCHEMA — edit labels, dropdown options and fields here.
+   t: text | num | date | time | dt (date+time) | sel | area | chips | calc
+   span: 1–4 grid columns. show(ctx): field appears only when it returns true.
+   ========================================================================== */
+const YNU = ['Yes','No','Unknown'];
+const YN = ['Yes','No'];
+const isCMV = c => c.s.f.fleet === 'Commercial motor vehicle (CMV)';
+const isCo = c => (c.u?.role||'') === 'Company vehicle';
+
+const BODY_TYPES = [
+  {g:'Light fleet', o:['Sedan','SUV','Pickup','Cargo van','Passenger van','Box truck (non-CDL)']},
+  {g:'Commercial motor vehicle', o:['Tractor-trailer','Tractor (bobtail)','Straight truck','Tanker','Tank truck (straight)','Flatbed','Dump truck','Service / utility truck','Bus']},
+  {g:'Other', o:['Motorcycle','Bicycle','Pedestrian','Other']}
+];
+
+const SCHEMA = {
+overview: [
+  {h:'Case information'},
+  {k:'caseNo', l:'Case no.', t:'text', span:2, hint:'unit no. – driver – date · fills in automatically, type to change, clear to rebuild'},
+  {k:'fleet', l:'Fleet type', t:'sel', o:['Light fleet','Commercial motor vehicle (CMV)']},
+  {k:'status', l:'Investigation status', t:'sel', o:['Open','Under review','Pending corrective action','Closed']},
+  {k:'company', l:'Company / division', t:'sel', o:['Coastal Chemical Co. LLC','NSPEC']},
+  {k:'crashDate', l:'Date of crash', t:'date'},
+  {k:'crashTime', l:'Time of crash', t:'time'},
+  {k:'reportedDate', l:'Date reported to company', t:'date'},
+  {k:'reportedBy', l:'Reported by', t:'text'},
+  {h:'Location'},
+  {k:'street', l:'Street / highway', t:'text', span:2},
+  {k:'cross', l:'Cross street / landmark', t:'text', span:2},
+  {k:'city', l:'City', t:'text'},
+  {k:'county', l:'County', t:'text'},
+  {k:'state', l:'State', t:'text'},
+  {k:'mile', l:'Mile marker / block', t:'text'},
+  {k:'locType', l:'Location type', t:'sel', o:['Intersection','Straight roadway','Curve','Highway / interstate','On-ramp / off-ramp','Parking lot','Customer site / yard','Company facility','Private driveway','Railroad crossing','Work zone','Other']},
+  {k:'gps', l:'GPS coordinates', t:'text', mono:1},
+  {k:'onCompanyTime', l:'On company business', t:'sel', o:YNU},
+  {k:'trip', l:'Trip purpose / route', t:'text'},
+  {h:'Crash'},
+  {k:'crashType', l:'Crash type', t:'sel', o:['Rear-end – struck other vehicle','Rear-end – struck by other vehicle','Angle / T-bone','Head-on','Sideswipe – same direction','Sideswipe – opposite direction','Left turn','Right turn','Backing','Lane change / merge','Struck parked vehicle','Fixed object','Rollover','Jackknife','Run off road','Pedestrian','Cyclist','Animal','Cargo / load shift','Other']},
+  {k:'severity', l:'Severity', t:'sel', o:['Property damage only','Injury – treated at scene','Injury – treated away from scene','Fatality']},
+  {k:'hitRun', l:'Hit and run', t:'sel', o:YN},
+  {k:'firstHarm', l:'First harmful event', t:'text'},
+  {k:'description', l:'Brief description of what happened', t:'area', span:4, rows:4},
+  {h:'Law enforcement'},
+  {k:'policeResp', l:'Police responded', t:'sel', o:YNU},
+  {k:'agency', l:'Agency', t:'text'},
+  {k:'policeNo', l:'Police report no.', t:'text', mono:1},
+  {k:'officer', l:'Officer / badge', t:'text'},
+  {k:'citation', l:'Citation issued', t:'sel', o:['None','Company driver','Other driver','Both drivers','Pending']},
+  {k:'citations', l:'Citation / violation', t:'list', span:3, add:'+ Add citation'},
+  {h:'Emergency response & towing'},
+  {k:'ems', l:'EMS responded', t:'sel', o:YNU},
+  {k:'fire', l:'Fire dept. responded', t:'sel', o:YNU},
+  {k:'tow', l:'Towing', t:'sel', o:['None','Company vehicle – disabling damage','Other vehicle – disabling damage','Both – disabling damage','Towed – not disabled']},
+  {k:'towCo', l:'Tow company', t:'text'},
+],
+conditions: [
+  {h:'Environment'},
+  {k:'weather', l:'Weather', t:'sel', o:['Clear','Cloudy','Rain','Heavy rain','Fog','Snow','Sleet / hail','Severe crosswind','Smoke / dust']},
+  {k:'light', l:'Lighting', t:'sel', o:['Daylight','Dawn','Dusk','Dark – lighted','Dark – not lighted']},
+  {k:'glare', l:'Sun glare', t:'sel', o:YNU},
+  {k:'temp', l:'Temperature (°F)', t:'num'},
+  {h:'Roadway'},
+  {k:'surface', l:'Surface condition', t:'sel', o:['Dry','Wet','Standing water','Snow','Ice','Slush','Mud / gravel / sand','Oil / fluid']},
+  {k:'surfType', l:'Surface type', t:'sel', o:['Asphalt','Concrete','Gravel','Dirt','Brick']},
+  {k:'alignment', l:'Alignment', t:'sel', o:['Straight – level','Straight – grade','Curve – level','Curve – grade','Hillcrest']},
+  {k:'roadDefects', l:'Road defects', t:'sel', o:['None','Potholes','Debris in road','Worn markings','Shoulder drop-off','Construction','Other']},
+  {k:'lanesTotal', l:'Total travel lanes', t:'num'},
+  {k:'divided', l:'Divided roadway', t:'sel', o:['Undivided','Painted median','Raised median','Barrier','One-way']},
+  {k:'speedLimit', l:'Posted speed (mph)', t:'num'},
+  {k:'workZone', l:'Work zone', t:'sel', o:YN},
+  {h:'Traffic'},
+  {k:'control', l:'Traffic control', t:'sel', o:['None','Traffic signal','Stop sign','All-way stop','Yield sign','Flashing signal','Officer / flagger','RR crossing gates','No passing zone']},
+  {k:'controlWorking', l:'Control functioning', t:'sel', o:['Yes','No','Not applicable']},
+  {k:'volume', l:'Traffic volume', t:'sel', o:['Light','Moderate','Heavy','Stop-and-go']},
+  {k:'visibility', l:'Sight obstructions', t:'text'},
+],
+unit: [
+  {h:'Vehicle'},
+  {k:'role', l:'Role', t:'sel', o:['Company vehicle','Other party vehicle','Parked vehicle','Pedestrian','Cyclist']},
+  {k:'fleetNo', l:'Company unit no.', t:'text', mono:1, show:isCo},
+  {k:'body', l:'Body type', t:'sel', o:BODY_TYPES},
+  {k:'year', l:'Year', t:'num'},
+  {k:'make', l:'Make', t:'text'},
+  {k:'model', l:'Model', t:'text'},
+  {k:'vin', l:'VIN', t:'text', mono:1, span:2},
+  {k:'plate', l:'Plate / state', t:'text', mono:1},
+  {k:'dir', l:'Direction of travel', t:'sel', o:['Northbound','Southbound','Eastbound','Westbound','Not moving']},
+  {k:'maneuver', l:'Pre-crash maneuver', t:'sel', o:['Going straight','Slowing','Stopped in traffic','Starting from stop','Left turn','Right turn','U-turn','Changing lanes','Merging','Passing','Backing','Parking','Parked','Entering roadway']},
+  {k:'speed', l:'Est. speed (mph)', t:'num'},
+  {k:'damage', l:'Damage areas', t:'chips', span:4, o:['Front','Front-left','Left side','Rear-left','Rear','Rear-right','Right side','Front-right','Roof','Undercarriage','Trailer']},
+  {k:'damageSev', l:'Damage severity', t:'sel', o:['None','Minor','Moderate','Severe','Total loss']},
+  {k:'drivable', l:'Drivable', t:'sel', o:YNU},
+  {k:'video', l:'Video / telematics', t:'sel', o:['Dashcam & telematics','Dashcam only','Telematics only','None','Unknown'], show:isCo},
+  {k:'videoSaved', l:'Footage preserved', t:'sel', o:YN, show:isCo},
+  {k:'insurer', l:'Insurance carrier', t:'text', show:c=>!isCo(c)},
+  {k:'policy', l:'Policy no.', t:'text', mono:1, show:c=>!isCo(c)},
+  {k:'owner', l:'Registered owner', t:'text', span:2, show:c=>!isCo(c)},
+  {h:'Driver'},
+  {k:'dName', l:'Name', t:'text', span:2},
+  {k:'empId', l:'Employee ID', t:'text', mono:1, show:isCo},
+  {k:'dPhone', l:'Phone', t:'text'},
+  {k:'licNo', l:'License no. / state', t:'text', mono:1},
+  {k:'licClass', l:'License class', t:'sel', o:['Class C – standard','Class M','CDL Class A','CDL Class B','CDL Class C','Unlicensed','Unknown']},
+  {k:'endorse', l:'CDL endorsements', t:'chips', span:2, o:['H – Hazmat','N – Tank','T – Doubles/triples','X – Tank + hazmat','P – Passenger','S – School bus'], show:c=>isCMV(c)&&isCo(c)},
+  {k:'yrsExp', l:'Years driving this class', t:'num', show:isCo},
+  {k:'hireDate', l:'Hire date', t:'date', show:isCo},
+  {k:'belt', l:'Seat belt used', t:'sel', o:YNU},
+  {k:'injury', l:'Driver injury', t:'sel', o:['None','Possible','Minor','Serious','Fatal']},
+  {k:'phoneUse', l:'Phone use', t:'sel', o:['None','Hands-free','Handheld','Unknown']},
+  {k:'impair', l:'Impairment', t:'sel', o:['None suspected','Suspected alcohol','Suspected drugs','Fatigue','Medical event','Unknown']},
+  {h:'CMV compliance (49 CFR)', show:c=>isCMV(c)&&isCo(c)},
+  {k:'usdot', l:'USDOT no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)},
+  {k:'gvwr', l:'GVWR / GCWR (lbs)', t:'num', show:c=>isCMV(c)&&isCo(c)},
+  {k:'trailerNo', l:'Trailer no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)},
+  {k:'cargo', l:'Cargo', t:'text', show:c=>isCMV(c)&&isCo(c)},
+  {k:'hazmat', l:'Hazmat on board', t:'sel', o:YN, show:c=>isCMV(c)&&isCo(c)},
+  {k:'placard', l:'Placard / UN no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)&&c.u.hazmat==='Yes'},
+  {k:'hazRelease', l:'Hazmat released', t:'sel', o:YN, show:c=>isCMV(c)&&isCo(c)&&c.u.hazmat==='Yes'},
+  {k:'hos', l:'Hours of service', t:'sel', o:['Within limits','Violation found','Under review'], show:c=>isCMV(c)&&isCo(c)},
+  {k:'hrsDrive', l:'Hrs driving before crash', t:'num', show:c=>isCMV(c)&&isCo(c)},
+  {k:'hrsDuty', l:'Hrs on duty before crash', t:'num', show:c=>isCMV(c)&&isCo(c)},
+  {k:'pretrip', l:'Pre-trip inspection done', t:'sel', o:YNU, show:c=>isCMV(c)&&isCo(c)},
+  {k:'dvir', l:'DVIR defects noted', t:'text', span:2, show:c=>isCMV(c)&&isCo(c)},
+  {k:'alcTime', l:'Alcohol test date/time', t:'dt', show:c=>isCMV(c)&&isCo(c)},
+  {k:'alcResult', l:'Alcohol result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:c=>isCMV(c)&&isCo(c)},
+  {k:'drugTime', l:'Drug test date/time', t:'dt', show:c=>isCMV(c)&&isCo(c)},
+  {k:'drugResult', l:'Drug result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:c=>isCMV(c)&&isCo(c)},
+  {k:'testNotes', l:'Reason a test was late or not done', t:'text', span:4, show:c=>isCMV(c)&&isCo(c)},
+  {h:'Company post-crash testing', show:c=>!isCMV(c)&&isCo(c)},
+  {k:'coTest', l:'Testing', t:'sel', o:['Required by company policy','Not required','Pending decision'], show:c=>!isCMV(c)&&isCo(c)},
+  {k:'coTestTime', l:'Test date/time', t:'dt', show:c=>!isCMV(c)&&isCo(c)},
+  {k:'coTestResult', l:'Result', t:'sel', o:['Negative','Positive','Refusal','Pending'], show:c=>!isCMV(c)&&isCo(c)},
+],
+witness: [
+  {k:'name', l:'Name', t:'text', span:2},
+  {k:'phone', l:'Phone', t:'text'},
+  {k:'type', l:'Witness type', t:'sel', o:['Independent','Passenger','Company employee','Other party','First responder']},
+  {k:'contact', l:'Email / address', t:'text', span:2},
+  {k:'taken', l:'Statement obtained', t:'sel', o:['Written','Recorded','Verbal only','Declined','Not yet']},
+  {k:'date', l:'Statement date', t:'date'},
+  {k:'statement', l:'Statement summary', t:'area', span:4, rows:3},
+],
+injured: [
+  {k:'name', l:'Name', t:'text', span:2},
+  {k:'unit', l:'Unit', t:'sel', o:c=>c.s.units.map((u,i)=>'Unit '+(i+1)).concat(['Not in a vehicle'])},
+  {k:'role', l:'Person was', t:'sel', o:['Driver','Passenger','Pedestrian','Cyclist','Other']},
+  {k:'treatment', l:'Treatment', t:'sel', o:['None','First aid at scene','Transported by EMS','Self-transported to clinic','Admitted to hospital','Fatal']},
+  {k:'facility', l:'Medical facility', t:'text', span:2},
+  {k:'employee', l:'Company employee', t:'sel', o:YN},
+  {k:'desc', l:'Injury description', t:'area', span:4, rows:2},
+],
+analysis: [
+  {h:'Evidence collected'},
+  {k:'evidence', l:'Check everything on file', t:'chips', span:4, o:['Scene photos','Vehicle photos','Dashcam video','Telematics / GPS data','ECM download','Police report','Driver statement','Witness statements','Drug & alcohol results','HOS / ELD records','DVIR / maintenance records','Repair estimates','Scene diagram','Cell phone records']},
+  {h:'Sequence of events'},
+  {k:'sequence', l:'Describe the events in order — before, at, and after impact', t:'area', span:4, rows:6},
+  {h:'Contributing factors'},
+  {k:'factors', l:'Select all that apply', t:'chips', span:4, o:['Following too closely','Speed too fast for conditions','Distraction','Fatigue','Failure to yield','Failure to obey control','Improper backing','Improper lane change','Inadequate mirror / blind-spot check','Improper turn','Weather','Road condition','Mechanical defect','Load securement','Schedule / route pressure','Training gap','Other party action']},
+  {k:'primary', l:'Primary factor', t:'text', span:2},
+  {k:'rootCat', l:'Root cause category', t:'sel', span:2, o:['Driver behavior','Equipment / maintenance','Environment / roadway','Policy or procedure','Training','Supervision','Other party']},
+  {k:'rootCause', l:'Root cause statement', t:'area', span:4, rows:3},
+  {h:'Preventability'},
+  {k:'standard', l:'Standard applied', t:'sel', span:2, o:['NSC – Preventable Collision Guide','FMCSA Crash Preventability Determination','Company policy']},
+  {k:'preventable', l:'Determination', t:'sel', span:2, o:['Preventable','Non-preventable','Undetermined']},
+  {k:'prevWhy', l:'Rationale — what could the driver reasonably have done to avoid it?', t:'area', span:4, rows:3},
+],
+review: [
+  {h:'Costs'},
+  {k:'costCo', l:'Company vehicle repair ($)', t:'num'},
+  {k:'costTp', l:'Third-party property ($)', t:'num'},
+  {k:'costMed', l:'Medical / injury ($)', t:'num'},
+  {k:'costOther', l:'Towing, rental, other ($)', t:'num'},
+  {k:'claimNo', l:'Insurance claim no.', t:'text', mono:1, span:2},
+  {k:'costTotal', l:'Total estimated cost', t:'calc', span:2, calc:c=>money(['costCo','costTp','costMed','costOther'].reduce((a,k)=>a+(+c.s.f[k]||0),0))},
+  {h:'Sign-off'},
+  {k:'investigator', l:'Investigator', t:'text'},
+  {k:'invTitle', l:'Title', t:'text'},
+  {k:'invDate', l:'Investigation completed', t:'date'},
+  {k:'committee', l:'Safety committee review', t:'sel', o:['Yes','No','Scheduled']},
+  {k:'reviewer', l:'Reviewed by', t:'text'},
+  {k:'revTitle', l:'Title', t:'text'},
+  {k:'revDate', l:'Review date', t:'date'},
+  {k:'closedDate', l:'Case closed', t:'date'},
+  {k:'driverAck', l:'Driver reviewed findings', t:'sel', o:['Yes','No','Refused to sign']},
+  {k:'finalNotes', l:'Final notes', t:'area', span:3, rows:3},
+],
+action: [
+  {k:'action', l:'Corrective action', t:'area', span:4, rows:2},
+  {k:'type', l:'Type', t:'sel', o:['Driver coaching','Retraining','Disciplinary action','Policy / procedure change','Equipment repair','Equipment upgrade','Route or schedule change','Other']},
+  {k:'owner', l:'Responsible', t:'text'},
+  {k:'due', l:'Due date', t:'date'},
+  {k:'status', l:'Status', t:'sel', o:['Open','In progress','Complete','Verified']},
+],
+property: [
+  {h:'Property damaged'},
+  {k:'type', l:'Property type', t:'sel', o:['Vehicle (not a listed unit)','Building / structure','Fence / wall / gate','Utility pole / equipment','Traffic signal / sign','Guardrail / barrier','Light pole','Mailbox','Landscaping / trees','Parked trailer / equipment','Cargo / freight','Personal property','Railroad property','Other']},
+  {k:'unit', l:'Damaged by', t:'sel', o:c=>c.s.units.map((u,i)=>'Unit '+(i+1)).concat(['Unknown'])},
+  {k:'severity', l:'Damage severity', t:'sel', o:['Minor','Moderate','Severe','Destroyed / total loss']},
+  {k:'estimate', l:'Estimated damage ($)', t:'num'},
+  {k:'location', l:'Property location / address', t:'text', span:3},
+  {k:'photos', l:'Photos taken', t:'sel', o:['Yes','No']},
+  {k:'desc', l:'Description of property and damage', t:'area', span:4, rows:3},
+  {h:'Owner information'},
+  {k:'ownerName', l:'Owner name', t:'text', span:2},
+  {k:'ownerType', l:'Owner type', t:'sel', o:['Private individual','Business','Government / municipality','Utility company','Railroad','Other']},
+  {k:'contact', l:'Contact person', t:'text'},
+  {k:'phone', l:'Phone', t:'text'},
+  {k:'email', l:'Email', t:'text'},
+  {k:'address', l:'Owner mailing address', t:'text', span:2},
+  {k:'notified', l:'Owner notified', t:'sel', o:['Yes','No','Unable to reach']},
+  {k:'notifiedDate', l:'Date notified', t:'date'},
+  {k:'notifiedBy', l:'Notified by', t:'text', span:2},
+  {h:'Insurance & claim'},
+  {k:'insurer', l:"Owner's insurance carrier", t:'text'},
+  {k:'policy', l:'Policy no.', t:'text', mono:1},
+  {k:'claimNo', l:'Claim no.', t:'text', mono:1},
+  {k:'claimStatus', l:'Claim status', t:'sel', o:['Not filed','Filed – open','Paid','Denied','Closed']},
+  {k:'notes', l:'Notes', t:'area', span:4, rows:2},
+],
+legal: [
+  {h:'Hold status'},
+  {k:'lhStatus', l:'Litigation hold', t:'sel', o:['No hold','Hold issued – active','Hold released']},
+  {k:'lhTrigger', l:'Reason for hold', t:'sel', span:2, o:['Letter of representation','Preservation / spoliation letter','Lawsuit filed','Subpoena','Insurance carrier request','Anticipated litigation – internal decision','Other']},
+  {k:'lhNoticeDate', l:'Notice received', t:'date'},
+  {k:'lhIssuedDate', l:'Hold issued', t:'date'},
+  {k:'lhIssuedBy', l:'Hold issued by', t:'text'},
+  {k:'lhReleasedDate', l:'Hold released', t:'date'},
+  {k:'lhReleasedBy', l:'Released by', t:'text'},
+  {k:'lhMatter', l:'Matter / case name', t:'text', span:2},
+  {k:'lhCourtNo', l:'Court / cause no.', t:'text', mono:1},
+  {k:'lhClaimNo', l:'Insurance claim no.', t:'text', mono:1},
+  {h:'Items to preserve'},
+  {k:'lhPreserve', l:'Select everything covered by the hold', t:'chips', span:4, o:['Dashcam video','Telematics / GPS data','ECM / EDR download','ELD / HOS logs','DVIR & maintenance records','Driver qualification file','Drug & alcohol records','Training records','Dispatch records','Emails & text messages','Cell phone records','Vehicle – do not repair or salvage','Trailer','Cargo / bills of lading','Scene photos','Police report','Witness statements','This investigation file']},
+  {k:'lhVehicle', l:'Vehicle status', t:'sel', span:2, o:['Held – do not repair','Inspected – released for repair','Released to insurer','Not applicable']},
+  {k:'lhVehicleLoc', l:'Where vehicle is stored', t:'text', span:2},
+  {k:'lhCustodians', l:'Employees notified to preserve records (name · date notified)', t:'area', span:4, rows:3},
+  {k:'lhNotes', l:'Hold notes', t:'area', span:4, rows:3},
+],
+attorney: [
+  {k:'role', l:'Role', t:'sel', span:2, o:['Company in-house counsel','Company outside counsel','Insurance defense counsel','Plaintiff / claimant attorney','Other party attorney','Other']},
+  {k:'represents', l:'Represents', t:'text', span:2},
+  {k:'name', l:'Attorney name', t:'text', span:2},
+  {k:'firm', l:'Law firm', t:'text', span:2},
+  {k:'phone', l:'Phone', t:'text'},
+  {k:'email', l:'Email', t:'text'},
+  {k:'paralegal', l:'Paralegal / assistant', t:'text', span:2},
+  {k:'address', l:'Address', t:'text', span:3},
+  {k:'letterDate', l:'Letter received', t:'date'},
+],
+lhRequest: [
+  {k:'request', l:'Specific request from the attorney', t:'area', span:4, rows:3},
+  {k:'from', l:'Requested by', t:'sel', o:c=>c.s.attorneys.map((a,i)=>a.name||('Attorney '+(i+1))).concat(['Other'])},
+  {k:'date', l:'Date requested', t:'date'},
+  {k:'due', l:'Due date', t:'date'},
+  {k:'status', l:'Status', t:'sel', o:['Open','In progress','Completed','Not available']},
+  {k:'response', l:'Response / what was provided', t:'area', span:4, rows:2},
+],
+};
+
+const TABS = [
+  ['overview','Overview'],['conditions','Conditions'],['units','Vehicles & drivers'],['people','Witnesses & injuries'],
+  ['property','Third-party property'],['diagram','Scene diagram'],['docs','Documents'],['analysis','Analysis'],['review','Actions & sign-off'],['legal','Litigation hold']
+];
+
+/* ==========================================================================
+   STATE
+   ========================================================================== */
+const pad = n => String(n).padStart(2,'0');
+function newCaseNo(){const d=new Date();return `INV-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`}
+function uid(){return Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4)}
+function blankUnit(role){return {role, damage:[], endorse:[]}}
+function defaultRoad(){return presetRoad('4way')}
+function blankState(){
+  return {id:uid(), f:{caseNo:'', caseNoManual:false, fleet:'Light fleet', status:'Open', evidence:[], factors:[]},
+    units:[blankUnit(''), blankUnit('')], witnesses:[], injured:[], actions:[], property:[], attorneys:[], lhRequests:[], docs:[],
+    diagram:{road:defaultRoad(), objects:[], notes:''}};
+}
+let S = blankState();
+let tab = 'overview';
+let dirty=false, everSaved=false, saving=false, saveAgain=false, saveTimer=null, lastSaved=null, userTouched=false;
+let cases = [];          // [{id, caseNo, crashDate, street, fleet, status, updatedAt, state}]
+let storeMode = 'pending';
+let DB=null, DL=null;
+
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => n? n.toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}) : '$0';
+function getP(o,p){return p.split('.').reduce((a,k)=>a==null?a:a[k],o)}
+function setP(o,p,v){const ks=p.split('.');let a=o;for(let i=0;i<ks.length-1;i++){a=a[ks[i]]??(a[ks[i]]={})}a[ks[ks.length-1]]=v}
+
+/* ==========================================================================
+   DOT DETERMINATION (49 CFR 390.5 accident definition; 382.303 testing)
+   ========================================================================== */
+function crashDateTime(){
+  const d=S.f.crashDate, t=S.f.crashTime; if(!d) return null;
+  const dt=new Date(d+'T'+(t||'00:00')); return isNaN(dt)?null:dt;
+}
+function fmtDT(d){return d.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+function determination(){
+  const f=S.f, cmv=f.fleet==='Commercial motor vehicle (CMV)';
+  const fatal=f.severity==='Fatality' || S.injured.some(p=>p.treatment==='Fatal');
+  const transported=f.severity==='Injury – treated away from scene' || S.injured.some(p=>/Transported|Self-transported|Admitted/.test(p.treatment||''));
+  const towDisabled=/disabling/.test(f.tow||'');
+  const citedCo=['Company driver','Both drivers'].includes(f.citation);
+  const known=!!f.severity && !!f.tow;
+  const recordable=fatal||transported||towDisabled;
+  const test=fatal||(citedCo&&(transported||towDisabled));
+  return {cmv,fatal,transported,towDisabled,citedCo,known,recordable,test};
+}
+function detHTML(){
+  const d=determination(), f=S.f, out=[];
+  const sev=f.severity||'Not entered';
+  out.push(`<div><span class="k">Fleet</span><span class="v">${d.cmv?'CMV':'Light fleet'}</span><span class="n">${esc(f.status||'Open')}</span></div>`);
+  if(f.lhStatus&&f.lhStatus!=='No hold') out.push(`<div><span class="k">Litigation hold</span><span class="v"><span class="pill ${f.lhStatus==='Hold issued – active'?'bad':'mut'}">${f.lhStatus==='Hold issued – active'?'Active – preserve all records':'Released'}</span></span><span class="n">${esc(f.lhMatter||'See the Litigation hold tab.')}</span></div>`);
+  out.push(`<div><span class="k">Severity</span><span class="v">${esc(sev)}</span><span class="n">${S.units.length} unit${S.units.length===1?'':'s'} · ${S.injured.length} injured listed</span></div>`);
+  if(d.cmv){
+    const rec = !d.known&&!d.recordable ? '<span class="pill mut">Need severity & towing</span>' : d.recordable?'<span class="pill bad">DOT recordable</span>':'<span class="pill ok">Not recordable</span>';
+    const why=[d.fatal&&'fatality',d.transported&&'injury treated away from scene',d.towDisabled&&'disabling tow-away'].filter(Boolean).join(', ');
+    out.push(`<div><span class="k">DOT accident · 390.5</span><span class="v">${rec}</span><span class="n">${d.recordable?'Add to accident register (390.15): '+why:'No fatality, transported injury, or disabling tow-away entered.'}</span></div>`);
+    let tn='';const ct=crashDateTime();
+    if(d.test){
+      tn = ct?`Alcohol by ${fmtDT(new Date(+ct+2*36e5))} (8 hr max ${fmtDT(new Date(+ct+8*36e5))}). Drug by ${fmtDT(new Date(+ct+32*36e5))}.`:'Enter crash date and time to see test deadlines.';
+    } else tn = d.citedCo?'Citation alone does not trigger testing.':'Required for a fatality, or a citation to the company driver plus a transported injury or disabling tow.';
+    out.push(`<div><span class="k">Post-accident testing · 382.303</span><span class="v">${d.test?'<span class="pill bad">Required</span>':'<span class="pill ok">Not required</span>'}</span><span class="n">${tn}</span></div>`);
+  } else {
+    const p=f.preventable;
+    out.push(`<div><span class="k">Preventability</span><span class="v">${p?`<span class="pill ${p==='Preventable'?'bad':p==='Non-preventable'?'ok':'warn'}">${esc(p)}</span>`:'<span class="pill mut">Not determined</span>'}</span><span class="n">Set on the Analysis tab.</span></div>`);
+  }
+  return `<div class="det" id="det">${out.join('')}</div>${d.cmv?'<p class="note">DOT determinations follow 49 CFR 390.5 and 382.303 using what is entered on this form. Confirm with your designated employer representative before acting.</p>':''}`;
+}
+
+/* ==========================================================================
+   FORM RENDERING
+   ========================================================================== */
+function optsHTML(o,v,ctx){
+  const list = typeof o==='function'? o(ctx) : o;
+  let h=`<option value="">—</option>`, found=!v;
+  for(const it of list){
+    if(typeof it==='object'){h+=`<optgroup label="${esc(it.g)}">`+it.o.map(x=>{if(x===v)found=true;return `<option${x===v?' selected':''}>${esc(x)}</option>`}).join('')+'</optgroup>'}
+    else {if(it===v)found=true;h+=`<option${it===v?' selected':''}>${esc(it)}</option>`}
+  }
+  if(!found) h+=`<option selected>${esc(v)}</option>`;
+  return h;
+}
+function cellHTML(d,base,obj,ctx){
+  const p=base+d.k, id='f-'+p.replace(/\./g,'_'), v=obj[d.k];
+  const sp=d.span?` s${d.span}`:'', mono=d.mono?' mono':'';
+  let c;
+  switch(d.t){
+    case 'sel': c=`<select id="${id}" data-p="${p}">${optsHTML(d.o,v||'',ctx)}</select>`;break;
+    case 'area': c=`<textarea id="${id}" data-p="${p}" rows="${d.rows||3}">${esc(v)}</textarea>`;break;
+    case 'num': c=`<input id="${id}" data-p="${p}" type="number" inputmode="decimal" step="any" value="${esc(v)}">`;break;
+    case 'date': c=`<input id="${id}" data-p="${p}" type="date" value="${esc(v)}">`;break;
+    case 'time': c=`<input id="${id}" data-p="${p}" type="time" value="${esc(v)}">`;break;
+    case 'dt': c=`<input id="${id}" data-p="${p}" type="datetime-local" value="${esc(v)}">`;break;
+    case 'calc': return `<div class="cell calc${sp}"><span class="lbl">${esc(d.l)}</span><output id="${id}" data-calc="${base}${d.k}">${esc(d.calc(ctx))}</output></div>`;
+    case 'list': {const arr=Array.isArray(v)&&v.length?v:[''];
+      return `<div class="cell${sp}"><span class="lbl" id="${id}-l">${esc(d.l)}</span><div class="mlist" role="group" aria-labelledby="${id}-l">${arr.map((x,i)=>`<div class="mrow"><span class="mno">${i+1}.</span><input id="${id}_${i}" data-p="${p}.${i}" type="text" value="${esc(x)}" autocomplete="off" aria-label="${esc(d.l)} ${i+1}">${arr.length>1?`<button type="button" class="btn sm" data-listdel="${p}" data-i="${i}" aria-label="Remove ${esc(d.l)} ${i+1}">✕</button>`:''}</div>`).join('')}<button type="button" class="btn sm" data-listadd="${p}">${esc(d.add||'+ Add')}</button></div></div>`;}
+    case 'chips': {const arr=Array.isArray(v)?v:[];
+      return `<div class="cell${sp}"><span class="lbl" id="${id}-l">${esc(d.l)}</span><div class="chips" role="group" aria-labelledby="${id}-l">${d.o.map(x=>`<button type="button" class="chip" data-chip="${p}" data-v="${esc(x)}" aria-pressed="${arr.includes(x)}">${esc(x)}</button>`).join('')}</div></div>`;}
+    default: c=`<input id="${id}" data-p="${p}" type="text" class="${mono}" value="${esc(v)}" autocomplete="off"${d.k==='caseNo'?' placeholder="Enter the company unit no., driver name and crash date"':''}>`;
+  }
+  return `<div class="cell${sp}"><label for="${id}">${esc(d.l)}${d.hint?`<span class="hint">· ${esc(d.hint)}</span>`:''}</label>${c}</div>`;
+}
+/* Renders a schema. Headings become dark bands (top level) or sub-bands (inside a repeat card). */
+function schemaHTML(defs,base,obj,ctx,sub){
+  let html='', open=false, skip=false;
+  for(const d of defs){
+    if(d.h){
+      if(open){html+='</div>'+(sub?'':'</section>');open=false}
+      skip = d.show && !d.show(ctx);
+      if(skip) continue;
+      html += sub? `<div class="subh">${esc(d.h)}</div><div class="grid">` : `<section class="sheet"><div class="band">${esc(d.h)}</div><div class="grid">`;
+      open=true; continue;
+    }
+    if(skip) continue;
+    if(d.show && !d.show(ctx)) continue;
+    if(!open){html+= sub?'<div class="grid">':'<section class="sheet"><div class="grid">';open=true}
+    html+=cellHTML(d,base,obj,ctx);
+  }
+  if(open) html+='</div>'+(sub?'':'</section>');
+  return html;
+}
+function repeatHTML(listKey,defs,title,ctxFn){
+  return S[listKey].map((it,i)=>{
+    const ctx={s:S,u:it};
+    return `<section class="sheet"><div class="band"><span>${title(it,i)}</span><span class="grow"></span>${delBtn(listKey,i)}</div>${schemaHTML(defs,`${listKey}.${i}.`,it,ctx,true)}</section>`;
+  }).join('');
+}
+let pendingDel=null;
+function delBtn(list,i){
+  const key=list+':'+i;
+  return pendingDel===key
+    ? `<span class="confirm"><button class="btn sm" data-del="${key}" data-confirm="1">Confirm remove</button><button class="btn sm" data-cancel>Keep</button></span>`
+    : `<button class="btn sm" data-del="${key}">Remove</button>`;
+}
+
+function unitTitle(u,i){ return `Unit ${i+1}`; }
+
+function renderTab(){
+  const v=document.getElementById('view');
+  const active=document.activeElement?.id;
+  v.className = tab==='diagram'?'wide':'';
+  const ctx={s:S};
+  let h='';
+  if(tab==='overview'){ h=detHTML()+schemaHTML(SCHEMA.overview,'f.',S.f,ctx); }
+  else if(tab==='conditions'){ h=schemaHTML(SCHEMA.conditions,'f.',S.f,ctx); }
+  else if(tab==='units'){
+    h=`<p class="note">Add one unit for every vehicle, pedestrian, or cyclist involved. Sections for CDL, hours of service, and DOT testing appear when the fleet type is CMV and the unit is a company vehicle.</p>`;
+    h+=repeatHTML('units',SCHEMA.unit,unitTitle);
+    h+=`<div class="addrow"><button class="btn" data-add="units">+ Add unit</button></div>`;
+  }
+  else if(tab==='people'){
+    h=repeatHTML('witnesses',SCHEMA.witness,(w,i)=>`Witness ${i+1}${w.name?' · '+esc(w.name):''}`);
+    if(!S.witnesses.length) h+=`<section class="sheet"><div class="band">Witnesses</div><div class="empty">No witnesses listed.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="witnesses">+ Add witness</button></div>`;
+    h+=repeatHTML('injured',SCHEMA.injured,(p,i)=>`Injured person ${i+1}${p.name?' · '+esc(p.name):''}`);
+    if(!S.injured.length) h+=`<section class="sheet"><div class="band">Injured persons</div><div class="empty">No injuries listed.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="injured">+ Add injured person</button></div>`;
+  }
+  else if(tab==='property'){
+    h=`<p class="note">Add one entry for each piece of property not owned by the company that was damaged — another party's parked vehicle, a fence, a building, a utility pole, a sign. Vehicles involved in the crash go on the Vehicles & drivers tab instead.</p>`;
+    h+=`<p class="note" id="tpTotal">${tpTotalText()}</p>`;
+    h+=repeatHTML('property',SCHEMA.property,(it,i)=>`Property ${i+1}${it.type?' · '+esc(it.type):''}${it.ownerName?' · '+esc(it.ownerName):''}`);
+    if(!S.property.length) h+=`<section class="sheet"><div class="band">Third-party property</div><div class="empty">No third-party property listed.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="property">+ Add damaged property</button></div>`;
+  }
+  else if(tab==='legal'){
+    h=`<p class="note">Record any litigation hold for this crash. While a hold is active, nothing listed below may be deleted, overwritten, repaired, or discarded.</p>`;
+    h+=schemaHTML(SCHEMA.legal.slice(0,SCHEMA.legal.findIndex(d=>d.h==='Items to preserve')),'f.',S.f,ctx);
+    h+=repeatHTML('attorneys',SCHEMA.attorney,(a,i)=>`Attorney ${i+1}${a.name?' · '+esc(a.name):''}${a.role?' · '+esc(a.role):''}`);
+    if(!S.attorneys.length) h+=`<section class="sheet"><div class="band">Attorneys</div><div class="empty">No attorneys listed.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="attorneys">+ Add attorney</button></div>`;
+    h+=repeatHTML('lhRequests',SCHEMA.lhRequest,(r,i)=>`Attorney request ${i+1}${r.status?' · '+esc(r.status):''}`);
+    if(!S.lhRequests.length) h+=`<section class="sheet"><div class="band">Attorney requests</div><div class="empty">No requests recorded. Add one for each item or action the attorney asks for.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="lhRequests">+ Add attorney request</button></div>`;
+    h+=schemaHTML(SCHEMA.legal.slice(SCHEMA.legal.findIndex(d=>d.h==='Items to preserve')),'f.',S.f,ctx);
+  }
+  else if(tab==='docs'){ h=docsHTML(); }
+  else if(tab==='analysis'){ h=schemaHTML(SCHEMA.analysis,'f.',S.f,ctx); }
+  else if(tab==='review'){
+    h=repeatHTML('actions',SCHEMA.action,(a,i)=>`Corrective action ${i+1}${a.status?' · '+esc(a.status):''}`);
+    if(!S.actions.length) h+=`<section class="sheet"><div class="band">Corrective actions</div><div class="empty">No corrective actions yet.</div></section>`;
+    h+=`<div class="addrow"><button class="btn" data-add="actions">+ Add corrective action</button></div>`;
+    h+=schemaHTML(SCHEMA.review,'f.',S.f,ctx);
+  }
+  if(tab==='diagram'){ v.innerHTML=diagramShell(); Dg.mount(); }
+  else { Dg.unmount(); v.innerHTML=h; if(tab==='docs') loadThumbs(); }
+  if(active){const el=document.getElementById(active); if(el && el!==document.body) el.focus({preventScroll:true});}
+  updateHeader();
+}
+function renderTabs(){
+  document.getElementById('tabs').innerHTML=TABS.map(([k,l])=>`<button role="tab" aria-selected="${k===tab}" data-tab="${k}">${l}</button>`).join('');
+}
+function updateHeader(){
+  const f=S.f;
+  document.getElementById('caseLine').textContent=[f.caseNo,f.street].filter(Boolean).join(' · ')||'New investigation';
+  document.getElementById('btnSave').disabled = storeMode==='pending';
+}
+function tpTotalText(){
+  const t=S.property.reduce((a,p)=>a+(+p.estimate||0),0);
+  return S.property.length?`Total estimated third-party property damage: <b>${money(t)}</b> across ${S.property.length} item${S.property.length===1?'':'s'}. Carry this to “Third-party property” on the Actions & sign-off tab.`:'';
+}
+function refreshComputed(){
+  const tp=document.getElementById('tpTotal'); if(tp) tp.innerHTML=tpTotalText();
+  const det=document.getElementById('det'); if(det) det.outerHTML=detHTML().replace(/<p class="note">[\s\S]*$/,'');
+  document.querySelectorAll('[data-calc]').forEach(o=>{
+    const k=o.dataset.calc.split('.').pop(); const d=SCHEMA.review.find(x=>x.k===k); if(d) o.textContent=d.calc({s:S});
+  });
+}
+
+/* Case number = company unit no. – driver name – crash date, unless the user typed their own. */
+function autoCaseNo(){
+  const u=S.units.find(x=>x.role==='Company vehicle')||S.units[0]||{};
+  const d=S.f.crashDate?S.f.crashDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/,'$2-$3-$1'):'';
+  return [u.role==='Company vehicle'&&u.fleetNo?'Unit '+u.fleetNo.trim():'', (u.dName||'').trim(), d].filter(Boolean).join(' – ');
+}
+function syncCaseNo(){
+  if(S.f.caseNoManual) return;
+  const v=autoCaseNo(); if(v===S.f.caseNo) return;
+  S.f.caseNo=v; const el=document.getElementById('f-f_caseNo'); if(el&&document.activeElement!==el) el.value=v;
+}
+/* events: form */
+const view=document.getElementById('view');
+view.addEventListener('input',e=>{
+  const p=e.target.dataset?.p; if(!p) return;
+  setP(S,p,e.target.value);
+  if(p==='f.caseNo') S.f.caseNoManual=e.target.value.trim()!=='';
+  syncCaseNo(); touch(); refreshComputed(); updateHeader();
+});
+view.addEventListener('change',e=>{
+  const p=e.target.dataset?.p; if(!p) return;
+  setP(S,p,e.target.value);
+  if(p==='f.caseNo'&&!e.target.value.trim()){S.f.caseNoManual=false;}
+  syncCaseNo(); touch(); updateHeader();
+  if(e.target.tagName==='SELECT' || /^docs\.\d+\.link$/.test(p)) renderTab();
+});
+view.addEventListener('click',e=>{
+  if(e.target.closest('[data-docpick]')){document.getElementById('docFile').click();return}
+  if(e.target.closest('[data-doclink]')){S.docs.push({id:uid(),cat:document.getElementById('docCat')?.value||'Other',name:'',link:'',desc:'',mark:'',added:new Date().toISOString(),stored:false});touch();renderTab();
+    const el=document.getElementById('f-docs_'+(S.docs.length-1)+'_name'); el&&el.focus(); return}
+  const dop=e.target.closest('[data-docopen]'); if(dop){openDoc(+dop.dataset.docopen,false);return}
+  const ddl=e.target.closest('[data-docdl]'); if(ddl){openDoc(+ddl.dataset.docdl,true);return}
+  const chip=e.target.closest('[data-chip]');
+  if(chip){const p=chip.dataset.chip, val=chip.dataset.v; let a=getP(S,p); if(!Array.isArray(a)){a=[];setP(S,p,a)}
+    const i=a.indexOf(val); i<0?a.push(val):a.splice(i,1); chip.setAttribute('aria-pressed',i<0); touch(); return;}
+  const la=e.target.closest('[data-listadd]');
+  if(la){const p=la.dataset.listadd;let a=getP(S,p);if(!Array.isArray(a)||!a.length){a=[''];setP(S,p,a)}a.push('');touch();renderTab();
+    const el=document.getElementById('f-'+p.replace(/\./g,'_')+'_'+(a.length-1)); el&&el.focus(); return;}
+  const ld=e.target.closest('[data-listdel]');
+  if(ld){const a=getP(S,ld.dataset.listdel);if(Array.isArray(a))a.splice(+ld.dataset.i,1);touch();renderTab();return;}
+  const add=e.target.closest('[data-add]');
+  if(add){const k=add.dataset.add; S[k].push(k==='units'?blankUnit(''):{}); touch(); renderTab(); return;}
+  const del=e.target.closest('[data-del]');
+  if(del){ if(del.dataset.confirm){const [k,i]=del.dataset.del.split(':'); if(k==='docs'){const dd=S.docs[+i]; if(dd&&dd.stored) IDB.del(S.id+'/'+dd.id).catch(()=>{});} S[k].splice(+i,1); pendingDel=null; touch();} else pendingDel=del.dataset.del; renderTab(); return;}
+  if(e.target.closest('[data-cancel]')){pendingDel=null;renderTab();}
+});
+document.getElementById('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('[data-tab]'); if(!b) return;
+  tab=b.dataset.tab; pendingDel=null; renderTabs(); renderTab(); window.scrollTo(0,0);
+  try{localStorage.setItem('cri.tab',tab)}catch(_){}
+});
+
+/* ==========================================================================
+   SCENE DIAGRAM
+   World units: px, 3 px = 1 ft. Object angles in degrees, 0 = facing right.
+   ========================================================================== */
+const FT=3;
+const C={ground:'#dfe5d8',asphalt:'#5d6369',shoulder:'#7d8389',white:'#f5f5ef',yellow:'#f2c230',grass:'#9bbb84',curb:'#c9ccc6',line:'#1d2328'};
+const VCOL=['#1f5fa8','#c0392b','#e8e8e2','#2b2f33','#2e8b57','#e3a21a','#7b4fa0','#8a5a2b'];
+
+function presetRoad(kind){
+  const L=(b,o={})=>Object.assign({on:true,name:'',b,lin:1,lout:1,center:'double',median:16,ctrl:'none',xwalk:false,shoulder:false},o);
+  const base={kind:'legs',laneFt:12,north:0,ringR:60,ringLanes:1,lot:{w:180,h:120,x:0,y:-170,rows:2,stalls:12},preset:kind,legs:[]};
+  switch(kind){
+    case 'straight': base.legs=[L(90,{name:'Main St'}),L(270)]; break;
+    case 'divided': base.legs=[L(90,{lin:2,lout:2,center:'median',name:'Highway'}),L(270,{lin:2,lout:2,center:'median'})]; break;
+    case 'tee': base.legs=[L(90,{name:'Main St'}),L(270),L(180,{ctrl:'stop',name:'Side St'})]; break;
+    case 'skew': base.legs=[L(90,{name:'Main St'}),L(270),L(210,{ctrl:'stop',name:'Side St'}),L(30,{ctrl:'stop'})]; break;
+    case 'round': base.kind='round'; base.legs=[L(0,{ctrl:'yield'}),L(90,{ctrl:'yield'}),L(180,{ctrl:'yield'}),L(270,{ctrl:'yield'})]; break;
+    case 'lot': base.kind='lot'; base.legs=[L(90,{name:'Main St'}),L(270)]; break;
+    case 'blank': base.legs=[]; break;
+    case 'signal': base.legs=[0,90,180,270].map(b=>L(b,{lin:2,lout:2,ctrl:'signal',xwalk:true})); base.legs[1].name='Main St'; base.legs[0].name='1st Ave'; break;
+    default: base.legs=[0,90,180,270].map(b=>L(b,{ctrl:(b%180===0)?'stop':'none'})); base.legs[1].name='Main St'; base.legs[0].name='Oak Ave';
+  }
+  return base;
+}
+
+/* ---------- object catalog (sizes in feet; front faces +x) ---------- */
+const CAT={
+  sedan:{n:'Sedan',grp:'Vehicles',w:15.5,h:6.2,col:true,veh:true},
+  suv:{n:'SUV',grp:'Vehicles',w:16.5,h:6.6,col:true,veh:true},
+  pickup:{n:'Pickup',grp:'Vehicles',w:19,h:6.8,col:true,veh:true},
+  van:{n:'Van',grp:'Vehicles',w:20,h:6.8,col:true,veh:true},
+  box:{n:'Box truck',grp:'Vehicles',w:26,h:8.2,col:true,veh:true},
+  tractor:{n:'Tractor',grp:'Vehicles',w:21,h:8.4,col:true,veh:true},
+  trailer:{n:'Trailer 53′',grp:'Vehicles',w:53,h:8.5,col:true,veh:true},
+  tanker:{n:'Tank trailer',grp:'Vehicles',w:43,h:8.5,col:true,veh:true},
+  tanktruck:{n:'Tank truck',grp:'Vehicles',w:30,h:8.4,col:true,veh:true},
+  bus:{n:'Bus',grp:'Vehicles',w:40,h:8.5,col:true,veh:true},
+  moto:{n:'Motorcycle',grp:'Vehicles',w:7,h:2.6,col:true,veh:true},
+  bike:{n:'Bicycle',grp:'Vehicles',w:6,h:2,col:true,veh:true},
+  ped:{n:'Pedestrian',grp:'Vehicles',w:2.2,h:2.6,col:true,veh:true},
+  tag1:{n:'UNIT 1',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 1',def:'#1d2328'},
+  tag2:{n:'UNIT 2',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 2',def:'#1d2328'},
+  tag3:{n:'UNIT 3',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 3',def:'#1d2328'},
+  tag4:{n:'UNIT 4',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 4',def:'#1d2328'},
+  stop:{n:'Stop sign',grp:'Traffic control',w:5,h:5},
+  yield:{n:'Yield sign',grp:'Traffic control',w:5,h:5},
+  signal:{n:'Signal',grp:'Traffic control',w:3,h:7},
+  speed:{n:'Speed sign',grp:'Traffic control',w:4,h:5},
+  cone:{n:'Cone',grp:'Traffic control',w:2,h:2},
+  barrel:{n:'Barrel',grp:'Traffic control',w:3,h:3},
+  rail:{n:'Railroad track',grp:'Railroad',w:200,h:8.5},
+  rrx:{n:'RR crossing sign',grp:'Railroad',w:6,h:6},
+  rrw:{n:'RR advance sign',grp:'Railroad',w:6,h:6},
+  rrgate:{n:'Crossing gate',grp:'Railroad',w:28,h:2},
+  building:{n:'Building',grp:'Roadside',w:60,h:40},
+  drive:{n:'Driveway',grp:'Roadside',w:40,h:24},
+  island:{n:'Median / island',grp:'Roadside',w:30,h:8},
+  stalls:{n:'Parking stalls',grp:'Roadside',w:45,h:18},
+  tree:{n:'Tree',grp:'Roadside',w:14,h:14},
+  pole:{n:'Utility pole',grp:'Roadside',w:2,h:2},
+  hydrant:{n:'Hydrant',grp:'Roadside',w:2,h:2},
+  fence:{n:'Fence',grp:'Roadside',w:60,h:1.5},
+  guard:{n:'Guardrail',grp:'Roadside',w:60,h:2},
+  arrow:{n:'Path arrow',grp:'Marks & evidence',w:40,h:3,col:true},
+  turnL:{n:'Left turn path',grp:'Marks & evidence',w:28,h:28,col:true},
+  turnR:{n:'Right turn path',grp:'Marks & evidence',w:28,h:28,col:true},
+  poi:{n:'Point of impact',grp:'Marks & evidence',w:7,h:7},
+  skid:{n:'Skid marks',grp:'Marks & evidence',w:40,h:6},
+  debris:{n:'Debris',grp:'Marks & evidence',w:16,h:10},
+  fluid:{n:'Fluid spill',grp:'Marks & evidence',w:10,h:7},
+  measure:{n:'Measurement',grp:'Marks & evidence',w:50,h:2},
+  text:{n:'Text label',grp:'Marks & evidence',w:30,h:5},
+};
+const BODY_TO_OBJ={'Sedan':'sedan','SUV':'suv','Pickup':'pickup','Cargo van':'van','Passenger van':'van','Box truck (non-CDL)':'box','Tractor-trailer':'tractor','Tractor (bobtail)':'tractor','Straight truck':'box','Tanker':'tractor','Tank truck (straight)':'tanktruck','Flatbed':'box','Dump truck':'box','Service / utility truck':'pickup','Bus':'bus','Motorcycle':'moto','Bicycle':'bike','Pedestrian':'ped','Other':'sedan'};
+
+function rng(seed){let s=0;for(const ch of String(seed))s=(s*31+ch.charCodeAt(0))>>>0;return()=>((s=(s*1664525+1013904223)>>>0)/4294967296)}
+const n1=v=>Math.round(v*10)/10;
+function shade(hex,amt){const n=parseInt(hex.slice(1),16);let r=n>>16,g=n>>8&255,b=n&255;r=Math.max(0,Math.min(255,r+amt));g=Math.max(0,Math.min(255,g+amt));b=Math.max(0,Math.min(255,b+amt));return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1)}
+
+const LINEAR=new Set(['measure','rail','arrow','skid','fence','guard','rrgate']);
+/* Unit tag: upright box with a short arrow; the arrow points in direction (rot - 90), so the rotate handle sits on the arrow. */
+function tagGeom(o){const hw=o.w*FT/2,hh=o.h*FT/2,a=((o.rot||0)-90)*Math.PI/180,ux=Math.cos(a),uy=Math.sin(a);
+  const d=Math.min(Math.abs(ux)>1e-6?hw/Math.abs(ux):1e9,Math.abs(uy)>1e-6?hh/Math.abs(uy):1e9);return {hw,hh,ux,uy,d,L:14};}
+function tagSVG(o){
+  const g=tagGeom(o), c=o.color||'#1d2328', x1=g.ux*g.d, y1=g.uy*g.d, x2=g.ux*(g.d+g.L), y2=g.uy*(g.d+g.L);
+  const hx=g.ux*(g.d+g.L+7), hy=g.uy*(g.d+g.L+7), px=-g.uy, py=g.ux;
+  return `<line x1="${n1(x1)}" y1="${n1(y1)}" x2="${n1(x2)}" y2="${n1(y2)}" stroke="${c}" stroke-width="2"/><polygon points="${n1(hx)},${n1(hy)} ${n1(x2+px*4.5)},${n1(y2+py*4.5)} ${n1(x2-px*4.5)},${n1(y2-py*4.5)}" fill="${c}"/>`
+   +`<rect x="${n1(-g.hw)}" y="${n1(-g.hh)}" width="${n1(2*g.hw)}" height="${n1(2*g.hh)}" rx="3" fill="#fff" stroke="${c}" stroke-width="1.6"/>`
+   +`<text x="0" y="0.5" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${n1(g.hh*1.15)}" fill="${c}">${esc(o.text||CAT[o.t]?.text||'UNIT')}</text>`;
+}
+function drawObj(o){
+  if(CAT[o.t]?.tag) return tagSVG(o);
+  const W=o.w*FT, H=o.h*FT, w=W/2, h=H/2, c=o.color||VCOL[0], k=C.line;
+  const glass='#25313b';
+  const wheel=(x,y,ww=W*0.12,hh=Math.max(2,H*0.12))=>`<rect x="${n1(x-ww/2)}" y="${n1(y-hh/2)}" width="${n1(ww)}" height="${n1(hh)}" rx="1" fill="#111"/>`;
+  switch(o.t){
+    case 'sedan': case 'suv': {
+      const r=H*0.3, ws=o.t==='suv'?0.2:0.16;
+      return wheel(w*0.6,-h,W*0.13,3)+wheel(w*0.6,h,W*0.13,3)+wheel(-w*0.62,-h,W*0.13,3)+wheel(-w*0.62,h,W*0.13,3)
+      +`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="${n1(r)}" fill="${c}" stroke="${k}" stroke-width="1"/>`
+      +`<path d="M${n1(W*ws)} ${n1(-h*0.82)} L${n1(W*(ws+0.12))} ${n1(-h*0.7)} L${n1(W*(ws+0.12))} ${n1(h*0.7)} L${n1(W*ws)} ${n1(h*0.82)}Z" fill="${glass}"/>`
+      +`<rect x="${n1(-W*0.24)}" y="${n1(-h*0.7)}" width="${n1(W*0.38+W*(ws-0.16))}" height="${n1(H*0.7)}" rx="2" fill="${shade(c,-18)}"/>`
+      +`<path d="M${n1(-W*0.27)} ${n1(-h*0.74)} L${n1(-W*0.36)} ${n1(-h*0.64)} L${n1(-W*0.36)} ${n1(h*0.64)} L${n1(-W*0.27)} ${n1(h*0.74)}Z" fill="${glass}"/>`
+      +`<rect x="${n1(w-2)}" y="${n1(-h*0.85)}" width="2" height="${n1(H*0.18)}" fill="#fff4bf"/><rect x="${n1(w-2)}" y="${n1(h*0.67)}" width="2" height="${n1(H*0.18)}" fill="#fff4bf"/>`
+      +`<rect x="${n1(-w)}" y="${n1(-h*0.85)}" width="1.6" height="${n1(H*0.16)}" fill="#e23b2e"/><rect x="${n1(-w)}" y="${n1(h*0.69)}" width="1.6" height="${n1(H*0.16)}" fill="#e23b2e"/>`;
+    }
+    case 'pickup': {
+      return wheel(w*0.62,-h,W*0.12,3)+wheel(w*0.62,h,W*0.12,3)+wheel(-w*0.6,-h,W*0.12,3)+wheel(-w*0.6,h,W*0.12,3)
+      +`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="${n1(H*0.22)}" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(-w+2)}" y="${n1(-h+2.5)}" width="${n1(W*0.47)}" height="${n1(H-5)}" rx="1" fill="${shade(c,-35)}" stroke="${shade(c,-60)}" stroke-width=".7"/>`
+      +`<path d="M${n1(W*0.2)} ${n1(-h*0.8)} L${n1(W*0.3)} ${n1(-h*0.68)} L${n1(W*0.3)} ${n1(h*0.68)} L${n1(W*0.2)} ${n1(h*0.8)}Z" fill="${glass}"/>`
+      +`<rect x="${n1(-W*0.03)}" y="${n1(-h*0.7)}" width="${n1(W*0.04)}" height="${n1(H*0.7)}" fill="${glass}"/>`
+      +`<rect x="${n1(w-2)}" y="${n1(-h*0.85)}" width="2" height="${n1(H*0.18)}" fill="#fff4bf"/><rect x="${n1(w-2)}" y="${n1(h*0.67)}" width="2" height="${n1(H*0.18)}" fill="#fff4bf"/>`;
+    }
+    case 'van': {
+      return wheel(w*0.62,-h,W*0.11,3)+wheel(w*0.62,h,W*0.11,3)+wheel(-w*0.6,-h,W*0.11,3)+wheel(-w*0.6,h,W*0.11,3)
+      +`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="${n1(H*0.2)}" fill="${c}" stroke="${k}"/>`
+      +`<path d="M${n1(W*0.3)} ${n1(-h*0.82)} L${n1(W*0.4)} ${n1(-h*0.7)} L${n1(W*0.4)} ${n1(h*0.7)} L${n1(W*0.3)} ${n1(h*0.82)}Z" fill="${glass}"/>`
+      +`<rect x="${n1(-w+3)}" y="${n1(-h*0.7)}" width="${n1(W*0.72)}" height="${n1(H*0.7)}" rx="2" fill="${shade(c,-14)}"/>`
+      +`<rect x="${n1(w-2)}" y="${n1(-h*0.85)}" width="2" height="${n1(H*0.16)}" fill="#fff4bf"/><rect x="${n1(w-2)}" y="${n1(h*0.69)}" width="2" height="${n1(H*0.16)}" fill="#fff4bf"/>`;
+    }
+    case 'box': {
+      const cab=W*0.22;
+      return wheel(w*0.68,-h,W*0.09,3)+wheel(w*0.68,h,W*0.09,3)+wheel(-w*0.55,-h,W*0.14,3)+wheel(-w*0.55,h,W*0.14,3)
+      +`<rect x="${n1(w-cab)}" y="${n1(-h*0.92)}" width="${n1(cab)}" height="${n1(H*0.92)}" rx="4" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w-cab*0.42)}" y="${n1(-h*0.78)}" width="${n1(cab*0.16)}" height="${n1(H*0.78)}" fill="${glass}"/>`
+      +`<rect x="${-w}" y="${-h}" width="${n1(W-cab-1.5)}" height="${H}" rx="1.5" fill="#ecebe5" stroke="${k}"/>`
+      +`<rect x="${-w}" y="${n1(-h)}" width="${n1(W-cab-1.5)}" height="3" fill="${c}" opacity=".85"/>`;
+    }
+    case 'tractor': {
+      return wheel(w*0.7,-h,W*0.12,3)+wheel(w*0.7,h,W*0.12,3)+wheel(-w*0.45,-h,W*0.14,3)+wheel(-w*0.45,h,W*0.14,3)+wheel(-w*0.8,-h,W*0.14,3)+wheel(-w*0.8,h,W*0.14,3)
+      +`<rect x="${-w}" y="${n1(-h*0.6)}" width="${n1(W*0.55)}" height="${n1(H*0.6)}" fill="#3a3f44" stroke="${k}"/>`
+      +`<circle cx="${n1(-w*0.62)}" cy="0" r="${n1(H*0.18)}" fill="#7d858c" stroke="${k}" stroke-width=".7"/>`
+      +`<rect x="${n1(-W*0.08)}" y="${-h}" width="${n1(W*0.33)}" height="${H}" rx="3" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(W*0.21)}" y="${n1(-h*0.75)}" width="${n1(W*0.04)}" height="${n1(H*0.75)}" fill="${glass}"/>`
+      +`<rect x="${n1(W*0.25)}" y="${n1(-h*0.72)}" width="${n1(W*0.25)}" height="${n1(H*0.72)}" rx="4" fill="${shade(c,-12)}" stroke="${k}"/>`
+      +`<rect x="${n1(W*0.16)}" y="${n1(-h-2)}" width="2" height="${n1(H+4)}" fill="#222"/>`;
+    }
+    case 'trailer': case 'tanker': {
+      let s=wheel(-w*0.72,-h,W*0.05,3)+wheel(-w*0.72,h,W*0.05,3)+wheel(-w*0.84,-h,W*0.05,3)+wheel(-w*0.84,h,W*0.05,3);
+      if(o.t==='tanker') s+=`<rect x="${-w}" y="${n1(-h*0.94)}" width="${W}" height="${n1(H*0.94)}" rx="${n1(H*0.45)}" fill="#cfd4d8" stroke="${k}"/><rect x="${n1(-w+6)}" y="${n1(-h*0.25)}" width="${n1(W-12)}" height="${n1(H*0.25)}" fill="${c}" opacity=".9"/>`
+        +[0.25,0.5,0.75].map(f=>`<circle cx="${n1(-w+W*f)}" cy="0" r="2.4" fill="#9aa1a6" stroke="${k}" stroke-width=".6"/>`).join('');
+      else {s+=`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="1" fill="${c}" stroke="${k}"/>`;for(let x=-w+12;x<w-4;x+=12)s+=`<line x1="${n1(x)}" y1="${n1(-h+1)}" x2="${n1(x)}" y2="${n1(h-1)}" stroke="${shade(c,-28)}" stroke-width=".8"/>`;}
+      return s+`<circle cx="${n1(w-6)}" cy="0" r="1.5" fill="#333"/>`;
+    }
+    case 'bus': {
+      return wheel(w*0.62,-h,W*0.06,3)+wheel(w*0.62,h,W*0.06,3)+wheel(-w*0.55,-h,W*0.06,3)+wheel(-w*0.55,h,W*0.06,3)
+      +`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="5" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w-4.5)}" y="${n1(-h*0.85)}" width="3" height="${n1(H*0.85)}" fill="${glass}"/>`
+      +`<rect x="${n1(-w*0.2)}" y="${n1(-h*0.5)}" width="${n1(W*0.2)}" height="${n1(H*0.5)}" rx="2" fill="${shade(c,-25)}"/>`;
+    }
+    case 'moto': return `<rect x="${n1(w*0.5)}" y="-1" width="${n1(W*0.25)}" height="2" rx="1" fill="#111"/><rect x="${-w}" y="-1" width="${n1(W*0.25)}" height="2" rx="1" fill="#111"/><ellipse cx="0" cy="0" rx="${n1(w*0.65)}" ry="${n1(h*0.8)}" fill="${c}" stroke="${k}"/><line x1="${n1(w*0.45)}" y1="${-h-1}" x2="${n1(w*0.45)}" y2="${h+1}" stroke="${k}" stroke-width="1.6"/>`;
+    case 'bike': return `<line x1="${-w}" y1="0" x2="${w}" y2="0" stroke="#111" stroke-width="1.8"/><line x1="${n1(-w*0.2)}" y1="0" x2="${n1(w*0.5)}" y2="0" stroke="${c}" stroke-width="3"/><line x1="${n1(w*0.6)}" y1="${-h-1}" x2="${n1(w*0.6)}" y2="${h+1}" stroke="${k}" stroke-width="1.4"/><circle cx="${n1(-w*0.2)}" cy="0" r="1.6" fill="${k}"/>`;
+    case 'ped': return `<ellipse cx="0" cy="0" rx="${n1(w*0.75)}" ry="${n1(h)}" fill="${c}" stroke="${k}"/><circle cx="${n1(w*0.1)}" cy="0" r="${n1(h*0.5)}" fill="#e7c7a6" stroke="${k}" stroke-width=".8"/>`;
+    case 'stop': {const r=Math.min(w,h);let pts=[];for(let i=0;i<8;i++){const a=Math.PI/8+i*Math.PI/4;pts.push(n1(r*Math.cos(a))+','+n1(r*Math.sin(a)))}
+      return `<polygon points="${pts.join(' ')}" fill="#c8102e" stroke="#fff" stroke-width="1"/><text x="0" y="${n1(r*0.28)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${n1(r*0.62)}" fill="#fff">STOP</text>`;}
+    case 'yield': {const r=Math.min(w,h);return `<polygon points="${-r},${n1(-r*0.85)} ${r},${n1(-r*0.85)} 0,${n1(r)}" fill="#fff" stroke="#c8102e" stroke-width="${n1(r*0.25)}" stroke-linejoin="round"/>`;}
+    case 'signal': return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="1.5" fill="#1b1e21" stroke="#555"/>`+[-1,0,1].map((i,j)=>`<circle cx="0" cy="${n1(i*H*0.3)}" r="${n1(w*0.6)}" fill="${['#e5383b','#f2c230','#34c06a'][j]}"/>`).join('');
+    case 'speed': return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="1" fill="#fff" stroke="#111"/><text x="0" y="${n1(h*0.55)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${n1(H*0.48)}" fill="#111">${esc(o.text||'35')}</text>`;
+    case 'cone': return `<circle r="${n1(w)}" fill="#f26b1d" stroke="#8a3a0c" stroke-width=".6"/><circle r="${n1(w*0.45)}" fill="#fff"/>`;
+    case 'barrel': return `<circle r="${n1(w)}" fill="#f26b1d" stroke="#8a3a0c" stroke-width=".6"/><circle r="${n1(w*0.62)}" fill="none" stroke="#fff" stroke-width="1.4"/>`;
+    case 'building': return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="url(#hatch)" stroke="#5c574e" stroke-width="1.5"/>`;
+    case 'drive': return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="${C.asphalt}"/>`;
+    case 'island': return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="${n1(Math.min(w,h))}" fill="${C.grass}" stroke="${C.curb}" stroke-width="2"/>`;
+    case 'stalls': {const n=Math.max(1,Math.round(o.w/9));let s=`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="${C.asphalt}"/>`;for(let i=0;i<=n;i++){const x=-w+i*W/n;s+=`<line x1="${n1(x)}" y1="${-h}" x2="${n1(x)}" y2="${h}" stroke="${C.white}" stroke-width="1.2"/>`}return s+`<line x1="${-w}" y1="${-h}" x2="${w}" y2="${-h}" stroke="${C.white}" stroke-width="1.2"/>`;}
+    case 'tree': {const r=Math.min(w,h);return `<circle r="${n1(r)}" fill="#5f8f4e" opacity=".9" stroke="#3f6634"/><circle r="${n1(r*0.55)}" fill="#6fa25c"/><circle r="${n1(r*0.12)}" fill="#6b4a2e"/>`;}
+    case 'pole': return `<circle r="${n1(w)}" fill="#7a5a3a" stroke="#3e2c1a"/>`;
+    case 'hydrant': return `<circle r="${n1(w)}" fill="#d6312a" stroke="#6d1612"/>`;
+    case 'fence': {let s=`<line x1="${-w}" y1="0" x2="${w}" y2="0" stroke="#4a4a4a" stroke-width="1"/>`;for(let x=-w;x<=w;x+=18)s+=`<path d="M${n1(x-2.5)} -2.5 L${n1(x+2.5)} 2.5 M${n1(x-2.5)} 2.5 L${n1(x+2.5)} -2.5" stroke="#4a4a4a" stroke-width="1"/>`;return s;}
+    case 'guard': {let s=`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="#b9bec2" stroke="#555"/>`;for(let x=-w+3;x<=w;x+=18)s+=`<rect x="${n1(x)}" y="${n1(h)}" width="2" height="3" fill="#555"/>`;return s;}
+    case 'arrow': {const hw=Math.max(2,H);return `<line x1="${-w}" y1="0" x2="${n1(w-hw*2.4)}" y2="0" stroke="${c}" stroke-width="${n1(hw)}" ${o.dash?'stroke-dasharray="8 5"':''}/><polygon points="${w},0 ${n1(w-hw*3)},${n1(-hw*1.6)} ${n1(w-hw*3)},${n1(hw*1.6)}" fill="${c}"/>`;}
+    case 'turnL': case 'turnR': {const sg=o.t==='turnL'?-1:1,sw=3.2;return `<path d="M${-w} ${n1(-sg*h*0.6)} L${n1(-w*0.2)} ${n1(-sg*h*0.6)} Q${n1(w*0.55)} ${n1(-sg*h*0.6)} ${n1(w*0.55)} ${n1(sg*h*0.35)}" fill="none" stroke="${c}" stroke-width="${sw}" ${o.dash?'stroke-dasharray="8 5"':''}/><polygon points="${n1(w*0.55)},${n1(sg*h)} ${n1(w*0.55-5.5)},${n1(sg*h*0.35)} ${n1(w*0.55+5.5)},${n1(sg*h*0.35)}" fill="${c}"/>`;}
+    case 'poi': {const r=Math.min(w,h);let pts=[];for(let i=0;i<16;i++){const a=i*Math.PI/8,rr=i%2?r*0.45:r;pts.push(n1(rr*Math.cos(a))+','+n1(rr*Math.sin(a)))}return `<polygon points="${pts.join(' ')}" fill="#ffd400" stroke="#c8102e" stroke-width="1.6"/><text y="2.6" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="7" fill="#c8102e">X</text>`;}
+    case 'skid': {const R=rng(o.id);let s='';for(const y of [-h*0.65,h*0.65]){let d=`M${-w} ${n1(y)}`;for(let x=-w+8;x<=w;x+=8)d+=` L${n1(x)} ${n1(y+(R()-.5)*1.2)}`;s+=`<path d="${d}" fill="none" stroke="#1a1a1a" stroke-width="${n1(Math.max(2,H*0.18))}" stroke-linecap="round" opacity=".72"/>`}return s;}
+    case 'debris': {const R=rng(o.id);let s='';for(let i=0;i<22;i++){const x=(R()-.5)*W,y=(R()-.5)*H;s+=R()>.5?`<circle cx="${n1(x)}" cy="${n1(y)}" r="${n1(.6+R()*1.4)}" fill="#3a3a3a"/>`:`<rect x="${n1(x)}" y="${n1(y)}" width="${n1(1+R()*2.5)}" height="${n1(1+R()*2)}" fill="#8a8f94" transform="rotate(${Math.round(R()*90)} ${n1(x)} ${n1(y)})"/>`}return s;}
+    case 'fluid': return `<path d="M${-w} 0 C${-w} ${-h} ${n1(-w*0.2)} ${-h*1.1} ${n1(w*0.3)} ${n1(-h*0.8)} C${w} ${n1(-h*0.6)} ${w} ${n1(h*0.7)} ${n1(w*0.2)} ${h} C${n1(-w*0.4)} ${n1(h*1.1)} ${-w} ${n1(h*0.6)} ${-w} 0Z" fill="#2c2b3a" opacity=".55"/>`;
+    case 'tanktruck': {
+      const cab=W*0.2;
+      return wheel(w*0.7,-h,W*0.08,3)+wheel(w*0.7,h,W*0.08,3)+wheel(-w*0.42,-h,W*0.1,3)+wheel(-w*0.42,h,W*0.1,3)+wheel(-w*0.7,-h,W*0.1,3)+wheel(-w*0.7,h,W*0.1,3)
+      +`<rect x="${n1(w-cab)}" y="${n1(-h*0.92)}" width="${n1(cab)}" height="${n1(H*0.92)}" rx="4" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w-cab*0.42)}" y="${n1(-h*0.78)}" width="${n1(cab*0.16)}" height="${n1(H*0.78)}" fill="${glass}"/>`
+      +`<rect x="${-w}" y="${n1(-h*0.94)}" width="${n1(W-cab-2)}" height="${n1(H*0.94)}" rx="${n1(H*0.45)}" fill="#cfd4d8" stroke="${k}"/>`
+      +`<rect x="${n1(-w+5)}" y="${n1(-h*0.22)}" width="${n1(W-cab-12)}" height="${n1(H*0.22)}" fill="${c}" opacity=".9"/>`
+      +[0.2,0.42,0.64].map(f=>`<circle cx="${n1(-w+(W-cab)*f)}" cy="0" r="2.2" fill="#9aa1a6" stroke="${k}" stroke-width=".6"/>`).join('');
+    }
+    case 'rail': {
+      let s=`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="#b9ad99"/>`;
+      for(let x=-w+3;x<w;x+=6) s+=`<rect x="${n1(x-1.5)}" y="${n1(-h+1)}" width="3" height="${n1(H-2)}" fill="#6b4f36"/>`;
+      const gg=2.35*FT; return s+`<line x1="${-w}" y1="${n1(-gg)}" x2="${w}" y2="${n1(-gg)}" stroke="#3d4247" stroke-width="1.8"/><line x1="${-w}" y1="${n1(gg)}" x2="${w}" y2="${n1(gg)}" stroke="#3d4247" stroke-width="1.8"/>`;
+    }
+    case 'rrx': {const r=Math.min(w,h),bh=r*0.34;return [35,-35].map(a=>`<rect x="${n1(-r)}" y="${n1(-bh/2)}" width="${n1(2*r)}" height="${n1(bh)}" fill="#fff" stroke="#111" stroke-width="1" transform="rotate(${a})"/>`).join('')+`<circle r="1.6" fill="#111"/>`;}
+    case 'rrw': {const r=Math.min(w,h);return `<circle r="${n1(r)}" fill="#f2c230" stroke="#111" stroke-width="1"/><path d="M${n1(-r*.62)} ${n1(-r*.62)}L${n1(r*.62)} ${n1(r*.62)}M${n1(r*.62)} ${n1(-r*.62)}L${n1(-r*.62)} ${n1(r*.62)}" stroke="#111" stroke-width="${n1(r*.12)}"/>`
+      +[-1,1].map(sg=>`<text x="${n1(sg*r*0.55)}" y="${n1(r*0.2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${n1(r*0.55)}" fill="#111">R</text>`).join('');}
+    case 'rrgate': {const n=8,sw=W/n;let s='';for(let i=0;i<n;i++)s+=`<rect x="${n1(-w+i*sw)}" y="${-h}" width="${n1(sw)}" height="${H}" fill="${i%2?'#ffffff':'#c8102e'}"/>`;
+      return s+`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="none" stroke="#111" stroke-width=".6"/><circle cx="${-w}" cy="0" r="4" fill="#333" stroke="#111"/>`;}
+    case 'measure': return `<line x1="${-w}" y1="0" x2="${w}" y2="0" stroke="#0b57d0" stroke-width="1.4" stroke-dasharray="5 3"/><line x1="${-w}" y1="-5" x2="${-w}" y2="5" stroke="#0b57d0" stroke-width="1.6"/><line x1="${w}" y1="-5" x2="${w}" y2="5" stroke="#0b57d0" stroke-width="1.6"/>`;
+    case 'text': return '';
+  }
+  return `<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="${c}"/>`;
+}
+function objLabel(o){
+  const t=o.t;
+  if(t==='text') return `<text text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${n1(o.h*FT)}" fill="${o.color||'#1d2328'}" transform="rotate(${o.rot||0})">${esc(o.text||'Label')}</text>`;
+  if(t==='measure'){const a=((o.rot||0)%360+360)%360, flip=a>90&&a<270;return `<text y="-6" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="10" fill="#0b57d0" stroke="#fff" stroke-width="3" paint-order="stroke" transform="rotate(${(o.rot||0)+(flip?180:0)})">${o.text?esc(o.text):n1(o.w)+' ft'}</text>`;}
+  if(!o.label) return '';
+  const veh=CAT[t]?.veh, big=o.w>=12;
+  const y= veh&&big?0:(o.h*FT/2+8);
+  return `<text y="${n1(y)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${big?11:9}" fill="#fff" stroke="#111" stroke-width="2.6" paint-order="stroke">${esc(o.label)}</text>`;
+}
+function objSVG(o){
+  if(CAT[o.t]?.tag){const g=tagGeom(o);return `<g data-id="${o.id}" transform="translate(${n1(o.x)} ${n1(o.y)})">${drawObj(o)}<rect x="${n1(-g.hw-3)}" y="${n1(-g.hh-3)}" width="${n1(2*g.hw+6)}" height="${n1(2*g.hh+6)}" fill="transparent"/></g>`;}
+  const ghost=o.style==='ghost';
+  const body=drawObj(o);
+  const outline=ghost?`<rect x="${n1(-o.w*FT/2-1)}" y="${n1(-o.h*FT/2-1)}" width="${n1(o.w*FT+2)}" height="${n1(o.h*FT+2)}" rx="3" fill="none" stroke="#111" stroke-dasharray="3 2" stroke-width="1"/>`:'';
+  return `<g data-id="${o.id}" transform="translate(${n1(o.x)} ${n1(o.y)})"><g transform="rotate(${n1(o.rot||0)})"${ghost?' opacity=".42"':''}>${body}${outline}<rect x="${n1(-o.w*FT/2-3)}" y="${n1(-o.h*FT/2-3)}" width="${n1(o.w*FT+6)}" height="${n1(o.h*FT+6)}" fill="transparent"/></g>${objLabel(o)}</g>`;
+}
+
+/* ---------- road geometry ---------- */
+function legHalf(l,R){const m=l.center==='median'?l.median*FT/2:0;return {m,inW:m+l.lin*R.laneFt*FT,outW:m+l.lout*R.laneFt*FT,sh:l.shoulder?8*FT:0,tw:l.lin?((l.turnL?1:0)+(l.turnR?1:0))*R.laneFt*FT:0}}
+function angDiff(a,b){let d=Math.abs(((a-b)%360+360)%360);return d>180?360-d:d}
+function legStart(l,R,active){
+  if(R.kind==='round') return R.ringR*FT+3*FT;
+  const me=legHalf(l,R), Wi=Math.max(me.inW+me.tw,me.outW)+me.sh;
+  let d=0, cross=0;
+  for(const o of active){ if(o===l) continue; const th=angDiff(l.b,o.b); if(th>150) continue; cross++;
+    const oh=legHalf(o,R), Wj=Math.max(oh.inW+oh.tw,oh.outW)+oh.sh, t=Math.max(20,th)*Math.PI/180;
+    d=Math.max(d, Wj/Math.sin(t) + (th<90? Wi/Math.tan(t):0));
+  }
+  return cross? d+4*FT : 0;
+}
+function roadSVG(R){
+  const LEN=700*FT, active=R.legs.filter(l=>l.on);
+  let base='', mark='', dev='', labels='', shl='', med='';
+  const minHalf = active.length? Math.min(...active.map(l=>{const h=legHalf(l,R);return Math.min(h.inW,h.outW)})) : 0;
+  if(R.kind==='lot'){
+    const L=R.lot, W=L.w*FT, H=L.h*FT, x0=L.x*FT-W/2, y0=L.y*FT-H/2;
+    base+=`<rect x="${n1(x0)}" y="${n1(y0)}" width="${n1(W)}" height="${n1(H)}" fill="${C.asphalt}" stroke="${C.curb}" stroke-width="3"/>`;
+    const rows=Math.max(1,L.rows|0), sd=18*FT, aisle=24*FT, stallW=9*FT, n=Math.max(1,L.stalls|0);
+    const totalH=rows*sd*2+(rows)*aisle; let y=y0+Math.max(6,(H-totalH)/2);
+    const rowW=n*stallW, xs=x0+Math.max(6,(W-rowW)/2);
+    for(let r=0;r<rows;r++){
+      for(const side of [0,1]){const yy=y+side*sd; for(let i=0;i<=n;i++){const x=xs+i*stallW; mark+=`<line x1="${n1(x)}" y1="${n1(yy)}" x2="${n1(x)}" y2="${n1(yy+sd)}" stroke="${C.white}" stroke-width="1.3"/>`} }
+      mark+=`<line x1="${n1(xs)}" y1="${n1(y+sd)}" x2="${n1(xs+rowW)}" y2="${n1(y+sd)}" stroke="${C.white}" stroke-width="1.3"/>`;
+      y+=sd*2+aisle;
+    }
+  }
+  for(const l of active){
+    const h=legHalf(l,R), d0=legStart(l,R,active), a=l.b-90, s0=(R.kind==='round'?(R.ringR-R.ringLanes*R.laneFt)*FT:-Math.max(0,minHalf*0.0));
+    const g=c=>`<g transform="rotate(${a})">${c}</g>`;
+    let b='', m='', dv='';
+    if(h.sh) shl+=g(`<rect x="${n1(s0)}" y="${n1(-h.inW-h.sh)}" width="${n1(LEN)}" height="${n1(h.inW+h.outW+2*h.sh)}" fill="${C.shoulder}"/>`);
+    b+=`<rect x="${n1(s0)}" y="${n1(-h.inW)}" width="${n1(LEN)}" height="${n1(h.inW+h.outW)}" fill="${C.asphalt}"/>`;
+    if(l.center==='median') med+=g(`<rect x="${n1(d0+4*FT)}" y="${n1(-h.m)}" width="${n1(LEN)}" height="${n1(2*h.m)}" rx="${n1(h.m)}" fill="${C.grass}" stroke="${C.curb}" stroke-width="1.5"/>`);
+    const x1=d0, run=LEN-d0, LW=R.laneFt*FT, tw=h.tw, TL=Math.max(20,l.turnLen||100)*FT, xb=x1+TL, xc=xb+50*FT;
+    const seg=(xa,ya,xz,yz,dash,col=C.white,sw=1.6)=>`<line x1="${n1(xa)}" y1="${n1(ya)}" x2="${n1(xz)}" y2="${n1(yz)}" stroke="${col}" stroke-width="${sw}"${dash?` stroke-dasharray="${10*FT} ${30*FT}"`:''}/>`;
+    // turn-lane widening on the inbound side
+    if(tw) b+=`<polygon points="${n1(x1-2)},${n1(-h.inW+1)} ${n1(x1-2)},${n1(-h.inW-tw)} ${n1(xb)},${n1(-h.inW-tw)} ${n1(xc)},${n1(-h.inW+1)}" fill="${C.asphalt}"/>`;
+    // edge lines
+    if(tw) m+=seg(x1,-h.inW-tw+1.5,xb,-h.inW-tw+1.5)+seg(xb,-h.inW-tw+1.5,xc,-h.inW+1.5)+seg(xc,-h.inW+1.5,LEN,-h.inW+1.5);
+    else m+=`<line x1="${n1(x1)}" y1="${n1(-h.inW+1.5)}" x2="${LEN}" y2="${n1(-h.inW+1.5)}" stroke="${C.white}" stroke-width="1.6"/>`;
+    m+=`<line x1="${n1(x1)}" y1="${n1(h.outW-1.5)}" x2="${LEN}" y2="${n1(h.outW-1.5)}" stroke="${C.white}" stroke-width="1.6"/>`;
+    // center
+    if(l.lin&&l.lout){
+      if(l.center==='double') m+=`<line x1="${n1(x1)}" y1="-1.6" x2="${LEN}" y2="-1.6" stroke="${C.yellow}" stroke-width="1.5"/><line x1="${n1(x1)}" y1="1.6" x2="${LEN}" y2="1.6" stroke="${C.yellow}" stroke-width="1.5"/>`;
+      else if(l.center==='dashed') m+=`<line x1="${n1(x1)}" y1="0" x2="${LEN}" y2="0" stroke="${C.yellow}" stroke-width="1.6" stroke-dasharray="${10*FT} ${30*FT}"/>`;
+      else if(l.center==='twlt') m+=`<line x1="${n1(x1)}" y1="-1.6" x2="${LEN}" y2="-1.6" stroke="${C.yellow}" stroke-width="1.5"/><line x1="${n1(x1)}" y1="1.6" x2="${LEN}" y2="1.6" stroke="${C.yellow}" stroke-width="1.5"/>`;
+      else if(l.center==='median') m+=`<line x1="${n1(x1)}" y1="${n1(-h.m-1.5)}" x2="${LEN}" y2="${n1(-h.m-1.5)}" stroke="${C.yellow}" stroke-width="1.5"/><line x1="${n1(x1)}" y1="${n1(h.m+1.5)}" x2="${LEN}" y2="${n1(h.m+1.5)}" stroke="${C.yellow}" stroke-width="1.5"/>`;
+    }
+    const off=(tw&&l.turnL)?LW:0;
+    for(let i=1;i<l.lin;i++){const y=-h.m-i*LW;
+      if(off) m+=seg(x1,y-off,xb,y-off,1,C.white,1.4)+seg(xb,y-off,xc,y,1,C.white,1.4)+seg(xc,y,LEN,y,1,C.white,1.4);
+      else m+=`<line x1="${n1(x1)}" y1="${n1(y)}" x2="${LEN}" y2="${n1(y)}" stroke="${C.white}" stroke-width="1.4" stroke-dasharray="${10*FT} ${30*FT}"/>`}
+    if(tw&&l.turnL) m+=seg(x1,-h.m-LW,xb,-h.m-LW)+seg(xb,-h.m-LW,xc,-h.m-1);
+    if(tw&&l.turnR) m+=seg(x1,-h.m-off-l.lin*LW,xb,-h.m-off-l.lin*LW);
+    for(let i=1;i<l.lout;i++){const y=h.m+i*LW;m+=`<line x1="${n1(x1)}" y1="${n1(y)}" x2="${LEN}" y2="${n1(y)}" stroke="${C.white}" stroke-width="1.4" stroke-dasharray="${10*FT} ${30*FT}"/>`}
+    // crosswalk + stop line
+    let sx=x1+2*FT;
+    if(l.xwalk){const cw=10*FT, top=-h.inW-tw, bot=h.outW; for(let y=top+2;y<bot-2;y+=4*FT) m+=`<rect x="${n1(sx)}" y="${n1(y)}" width="${n1(cw)}" height="${n1(2*FT)}" fill="${C.white}"/>`; sx+=cw+4*FT;}
+    if(l.lin && (l.ctrl==='stop'||l.ctrl==='signal')) m+=`<rect x="${n1(sx)}" y="${n1(-h.inW-tw+1)}" width="${n1(2*FT)}" height="${n1(h.inW+tw-h.m-1)}" fill="${C.white}"/>`;
+    if(l.lin && l.ctrl==='yield'){for(let y=-h.inW-tw+2;y<-h.m-4;y+=3*FT) m+=`<polygon points="${n1(sx)},${n1(y+1.5*FT)} ${n1(sx+3*FT)},${n1(y)} ${n1(sx+3*FT)},${n1(y+3*FT)}" fill="${C.white}"/>`}
+    // turn arrows painted in each turn lane (traffic travels toward −x; left is +y)
+    if(tw){const arrow=(ax,ay,sg)=>`<path d="M${n1(ax+42)} ${n1(ay)} L${n1(ax+12)} ${n1(ay)} Q${n1(ax)} ${n1(ay)} ${n1(ax)} ${n1(ay+sg*9)}" fill="none" stroke="${C.white}" stroke-width="3"/><polygon points="${n1(ax)},${n1(ay+sg*17)} ${n1(ax-5)},${n1(ay+sg*9)} ${n1(ax+5)},${n1(ay+sg*9)}" fill="${C.white}"/>`;
+      const xs=[sx+10*FT]; if(TL>=90*FT) xs.push(x1+TL*0.6);
+      for(const ax of xs){ if(l.turnL) m+=arrow(ax,-h.m-LW/2,1); if(l.turnR) m+=arrow(ax,-h.m-off-l.lin*LW-LW/2,-1); }}
+    // control device at roadside, right of inbound traffic (−y side)
+    const devX=sx+5*FT, devY=-h.inW-tw-h.sh-9;
+    if(l.lin && l.ctrl!=='none'){
+      const t={stop:'stop',yield:'yield',signal:'signal'}[l.ctrl];
+      dv+=`<g transform="translate(${n1(devX)} ${n1(devY)}) rotate(${-a})">${drawObj({t,w:t==='signal'?3:5.5,h:t==='signal'?7.5:5.5})}</g>`;
+    }
+    // road name
+    if(l.name){const nx=d0+6*FT+l.name.length*3.4, norm=((a%360)+360)%360, flip=norm>90&&norm<270;
+      labels+=g(`<text x="${n1(nx)}" y="${n1(h.outW+h.sh+14)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="12" fill="#37413f" ${flip?`transform="rotate(180 ${n1(nx)} ${n1(h.outW+h.sh+14)})"`:''}>${esc(l.name)}</text>`);}
+    base+=g(b); mark+=g(m); dev+=g(dv);
+  }
+  // center patch (fills the intersection box)
+  if(R.kind==='legs' && active.length>=2){
+    const r=Math.max(...active.map(l=>{const h=legHalf(l,R);return Math.max(h.inW,h.outW)}));
+    base+=`<circle r="${n1(active.length>=3?minHalf:r)}" fill="${C.asphalt}"/>`;
+  }
+  if(R.kind==='round'){
+    const Ro=R.ringR*FT, Ri=Math.max(10,(R.ringR-R.ringLanes*R.laneFt)*FT);
+    base+=`<circle r="${n1(Ro)}" fill="${C.asphalt}"/>`;
+    mark+=`<circle r="${n1(Ri)}" fill="${C.grass}" stroke="${C.curb}" stroke-width="3"/><circle r="${n1(Ri*0.25)}" fill="#7da86a"/>`;
+    for(let i=1;i<R.ringLanes;i++) mark+=`<circle r="${n1(Ri+i*R.laneFt*FT)}" fill="none" stroke="${C.white}" stroke-width="1.4" stroke-dasharray="${6*FT} ${8*FT}"/>`;
+  }
+  return shl+base+med+mark+dev+labels;
+}
+
+/* ---------- diagram controller ---------- */
+const Dg={
+  svg:null, vb:{x:-480,y:-300,w:960,h:600}, sel:null, undo:[], redo:[], drag:null, ptrs:new Map(), pinch:null, ro:null,
+  get D(){return S.diagram},
+  mount(){
+    this.svg=document.getElementById('scene');
+    this.fitAspect(); this.drawRoad(); this.drawObjs(); this.renderPal(); this.renderProps(); this.drawOverlays();
+    this.ro=new ResizeObserver(()=>{this.fitAspect();this.drawObjs();this.drawOverlays()}); this.ro.observe(this.svg);
+    this.bind();
+  },
+  unmount(){ if(this.ro){this.ro.disconnect();this.ro=null} this.svg=null; },
+  k(){return this.vb.w/(this.svg?.clientWidth||960)},
+  fitAspect(){const r=this.svg.getBoundingClientRect();if(!r.width)return;this.vb.h=this.vb.w*r.height/r.width;this.applyVB()},
+  applyVB(){const v=this.vb;this.svg.setAttribute('viewBox',`${n1(v.x)} ${n1(v.y)} ${n1(v.w)} ${n1(v.h)}`)},
+  pt(e){const p=this.svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return p.matrixTransform(this.svg.getScreenCTM().inverse())},
+  snapshot(){this.undo.push(JSON.stringify(S.diagram));if(this.undo.length>60)this.undo.shift();this.redo=[];this.updUndo()},
+  doUndo(){if(!this.undo.length)return;this.redo.push(JSON.stringify(S.diagram));S.diagram=JSON.parse(this.undo.pop());this.sel=null;this.full();touch()},
+  doRedo(){if(!this.redo.length)return;this.undo.push(JSON.stringify(S.diagram));S.diagram=JSON.parse(this.redo.pop());this.sel=null;this.full();touch()},
+  updUndo(){const u=document.getElementById('dUndo'),r=document.getElementById('dRedo');if(u)u.disabled=!this.undo.length;if(r)r.disabled=!this.redo.length},
+  full(){this.drawRoad();this.drawObjs();this.renderProps();this.drawOverlays();this.updUndo()},
+  drawRoad(){document.getElementById('roadL').innerHTML=roadSVG(this.D.road)},
+  drawObjs(){
+    if(!this.svg) return;
+    document.getElementById('objL').innerHTML=this.D.objects.map(objSVG).join('');
+    const o=this.obj(this.sel), sl=document.getElementById('selL');
+    if(!o){sl.innerHTML='';return}
+    const k=this.k(), W=o.w*FT, H=o.h*FT, off=H/2+Math.max(14,18*k);
+    if(CAT[o.t]?.tag){const g=tagGeom(o),r=g.d+g.L+16*k;
+      sl.innerHTML=`<g transform="translate(${n1(o.x)} ${n1(o.y)})"><rect x="${n1(-g.hw-4*k)}" y="${n1(-g.hh-4*k)}" width="${n1(2*g.hw+8*k)}" height="${n1(2*g.hh+8*k)}" fill="none" stroke="#0b57d0" stroke-width="${n1(1.5*k)}" stroke-dasharray="${n1(5*k)} ${n1(3*k)}"/><circle data-handle="rot" cx="${n1(g.ux*r)}" cy="${n1(g.uy*r)}" r="${n1(7*k)}" fill="#fff" stroke="#0b57d0" stroke-width="${n1(2*k)}" style="cursor:grab"/></g>`;return;}
+    const ends=LINEAR.has(o.t)?[-1,1].map(sg=>`<rect data-handle="${sg<0?'endA':'endB'}" x="${n1(sg*W/2-6*k)}" y="${n1(-6*k)}" width="${n1(12*k)}" height="${n1(12*k)}" rx="${n1(2*k)}" fill="#0b57d0" stroke="#fff" stroke-width="${n1(1.5*k)}" style="cursor:move"/>`).join(''):'';
+    sl.innerHTML=`<g transform="translate(${n1(o.x)} ${n1(o.y)}) rotate(${n1(o.rot||0)})"><rect x="${n1(-W/2-4*k)}" y="${n1(-H/2-4*k)}" width="${n1(W+8*k)}" height="${n1(H+8*k)}" fill="none" stroke="#0b57d0" stroke-width="${n1(1.5*k)}" stroke-dasharray="${n1(5*k)} ${n1(3*k)}"/><line x1="0" y1="${n1(-H/2-4*k)}" x2="0" y2="${n1(-off)}" stroke="#0b57d0" stroke-width="${n1(1.5*k)}"/><circle data-handle="rot" cx="0" cy="${n1(-off)}" r="${n1(7*k)}" fill="#fff" stroke="#0b57d0" stroke-width="${n1(2*k)}" style="cursor:grab"/><path d="M${n1(-3*k)} ${n1(-off-1*k)} a${n1(3.2*k)} ${n1(3.2*k)} 0 1 1 ${n1(3*k)} ${n1(3.5*k)}" fill="none" stroke="#0b57d0" stroke-width="${n1(1.3*k)}" pointer-events="none"/>${ends}</g>`;
+  },
+  drawOverlays(){
+    const sc=document.getElementById('scaleOv'), cp=document.getElementById('compOv'); if(!sc||!this.svg) return;
+    const pxPerFt=FT/this.k(); const nice=[5,10,20,25,50,100,200,500].find(v=>v*pxPerFt>=70)||500; const L=nice*pxPerFt;
+    sc.innerHTML=`<svg width="${n1(L+40)}" height="26"><rect x="0" y="12" width="${n1(L/2)}" height="6" fill="#1d2328"/><rect x="${n1(L/2)}" y="12" width="${n1(L/2)}" height="6" fill="#fff" stroke="#1d2328"/><text x="0" y="9" font-size="10" font-weight="700" fill="#1d2328">0</text><text x="${n1(L)}" y="9" font-size="10" font-weight="700" text-anchor="middle" fill="#1d2328">${nice} ft</text></svg>`;
+    cp.innerHTML=compassSVG(this.D.road.north||0);
+  },
+  obj(id){return this.D.objects.find(o=>o.id===id)},
+  add(t,x,y){
+    const c=CAT[t]; this.snapshot();
+    const vehCount=this.D.objects.filter(o=>CAT[o.t]?.veh).length;
+    const o={id:uid(),t,x:x??(this.vb.x+this.vb.w/2),y:y??(this.vb.y+this.vb.h/2),rot:0,w:c.w,h:c.h,label:c.veh&&t!=='trailer'&&t!=='tanker'?'Unit '+(vehCount+1):'',color:c.def||(c.col?(c.veh?VCOL[vehCount%VCOL.length]:'#0b57d0'):'')};
+    if(c.tag) o.text=c.text;
+    if(t==='text') o.text='Label';
+    if(t==='speed') o.text=S.f.speedLimit||'35';
+    if(['building','drive','island','stalls','rail'].includes(t)) this.D.objects.unshift(o); else this.D.objects.push(o);
+    this.sel=o.id; this.drawObjs(); this.renderProps(); touch();
+  },
+  addUnits(){
+    this.snapshot(); let i=0;
+    S.units.forEach((u,idx)=>{
+      const lab='Unit '+(idx+1); if(this.D.objects.some(o=>o.label===lab)) return;
+      const t=BODY_TO_OBJ[u.body]||(u.role==='Pedestrian'?'ped':u.role==='Cyclist'?'bike':'sedan'); const c=CAT[t];
+      const cx=this.vb.x+this.vb.w/2+(i-1)*60, cy=this.vb.y+this.vb.h/2+ (i%2?40:-40);
+      const col=u.role==='Company vehicle'?VCOL[0]:VCOL[(idx%(VCOL.length-1))+1];
+      this.D.objects.push({id:uid(),t,x:cx,y:cy,rot:0,w:c.w,h:c.h,label:lab,color:col});
+      if(u.body==='Tractor-trailer'||u.body==='Tanker'){const tt=u.body==='Tanker'?'tanker':'trailer';this.D.objects.push({id:uid(),t:tt,x:cx-(c.w/2+CAT[tt].w/2-4)*FT,y:cy,rot:0,w:CAT[tt].w,h:CAT[tt].h,label:'',color:u.body==='Tanker'?col:VCOL[2]})}
+      i++;
+    });
+    if(!i){toast('Every unit is already on the diagram.');this.undo.pop();this.updUndo();return}
+    this.drawObjs(); this.renderProps(); touch(); toast(`Added ${i} unit${i>1?'s':''} to the diagram.`);
+  },
+  remove(id){this.snapshot();this.D.objects=this.D.objects.filter(o=>o.id!==id);this.sel=null;this.drawObjs();this.renderProps();touch()},
+  dup(id){const o=this.obj(id);if(!o)return;this.snapshot();const n={...o,id:uid(),x:o.x+20,y:o.y+20};this.D.objects.push(n);this.sel=n.id;this.drawObjs();this.renderProps();touch()},
+  layer(id,dir){const a=this.D.objects,i=a.findIndex(o=>o.id===id);if(i<0)return;this.snapshot();const [o]=a.splice(i,1);if(dir==='front')a.push(o);else if(dir==='back')a.unshift(o);else if(dir==='up')a.splice(Math.min(a.length,i+1),0,o);else a.splice(Math.max(0,i-1),0,o);this.drawObjs();touch()},
+  zoom(f,cx,cy){const v=this.vb;const nw=Math.min(6000,Math.max(80,v.w*f));const s=nw/v.w;cx??=v.x+v.w/2;cy??=v.y+v.h/2;v.x=cx-(cx-v.x)*s;v.y=cy-(cy-v.y)*s;v.w=nw;v.h*=s;this.applyVB();this.drawObjs();this.drawOverlays()},
+  fit(){
+    let xs=[-300,300],ys=[-200,200];
+    for(const o of this.D.objects){const r=Math.max(o.w,o.h)*FT/2;xs.push(o.x-r,o.x+r);ys.push(o.y-r,o.y+r)}
+    if(this.D.road.kind==='lot'){const L=this.D.road.lot;xs.push((L.x-L.w/2)*FT,(L.x+L.w/2)*FT);ys.push((L.y-L.h/2)*FT,(L.y+L.h/2)*FT)}
+    const minx=Math.min(...xs)-40,maxx=Math.max(...xs)+40,miny=Math.min(...ys)-40,maxy=Math.max(...ys)+40;
+    const r=this.svg.getBoundingClientRect(), asp=r.height/r.width;
+    let w=maxx-minx, h=w*asp; if(h<maxy-miny){h=maxy-miny;w=h/asp}
+    this.vb={x:(minx+maxx)/2-w/2,y:(miny+maxy)/2-h/2,w,h};this.applyVB();this.drawObjs();this.drawOverlays();
+  },
+  bind(){
+    const svg=this.svg;
+    svg.addEventListener('pointerdown',e=>this.down(e));
+    svg.addEventListener('pointermove',e=>this.move(e));
+    svg.addEventListener('pointerup',e=>this.up(e));
+    svg.addEventListener('pointercancel',e=>this.up(e));
+    svg.addEventListener('wheel',e=>{e.preventDefault();const p=this.pt(e);this.zoom(Math.exp(e.deltaY*0.0015),p.x,p.y)},{passive:false});
+    const st=document.getElementById('stage');
+    st.addEventListener('dragover',e=>{e.preventDefault()});
+    st.addEventListener('drop',e=>{e.preventDefault();const t=e.dataTransfer.getData('text/plain');if(CAT[t]){const p=this.pt(e);this.add(t,p.x,p.y)}});
+    document.getElementById('pal').addEventListener('click',e=>{const b=e.target.closest('[data-obj]');if(b)this.add(b.dataset.obj)});
+    document.getElementById('pal').addEventListener('dragstart',e=>{const b=e.target.closest('[data-obj]');if(b)e.dataTransfer.setData('text/plain',b.dataset.obj)});
+    document.getElementById('dtools').addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act;
+      if(a==='in')this.zoom(1/1.25);else if(a==='out')this.zoom(1.25);else if(a==='fit')this.fit();else if(a==='undo')this.doUndo();else if(a==='redo')this.doRedo();else if(a==='units')this.addUnits();});
+    const pr=document.getElementById('props');
+    pr.addEventListener('input',e=>this.propInput(e,false));
+    pr.addEventListener('change',e=>this.propInput(e,true));
+    pr.addEventListener('click',e=>this.propClick(e));
+    pr.addEventListener('focusin',e=>{if(e.target.matches('input,select,textarea')&&!this._editing){this._editing=true;this.snapshot()}});
+    pr.addEventListener('focusout',()=>{this._editing=false});
+  },
+  down(e){
+    const p=this.pt(e); this.ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    this.svg.setPointerCapture(e.pointerId);
+    if(this.ptrs.size===2){const [a,b]=[...this.ptrs.values()];this.pinch={d:Math.hypot(a.x-b.x,a.y-b.y),vb:{...this.vb},mid:this.pt({clientX:(a.x+b.x)/2,clientY:(a.y+b.y)/2})};this.drag=null;return}
+    const handle=e.target.closest('[data-handle]'); const g=e.target.closest('[data-id]');
+    if(handle&&this.sel){this.snapshot();const hd=handle.dataset.handle;
+      if(hd==='rot'){this.drag={mode:'rot'};return}
+      const o=this.obj(this.sel),r=(o.rot||0)*Math.PI/180,ux=Math.cos(r),uy=Math.sin(r),hw=o.w*FT/2,sg=hd==='endB'?-1:1;
+      this.drag={mode:'end',which:hd,fx:o.x+sg*ux*hw,fy:o.y+sg*uy*hw,ux,uy,moved:false};return}
+    if(g){const o=this.obj(g.dataset.id);this.sel=o.id;this.snapshot();this.drag={mode:'move',sx:p.x,sy:p.y,ox:o.x,oy:o.y,moved:false};this.drawObjs();this.renderProps();return}
+    if(this.sel){this.sel=null;this.drawObjs();this.renderProps()}
+    this.drag={mode:'pan',cx:e.clientX,cy:e.clientY,vb:{...this.vb}}; this.svg.classList.add('panning');
+  },
+  move(e){
+    if(this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(this.pinch&&this.ptrs.size===2){const [a,b]=[...this.ptrs.values()];const d=Math.hypot(a.x-b.x,a.y-b.y);const f=this.pinch.d/d;const v0=this.pinch.vb,m=this.pinch.mid;const nw=Math.min(6000,Math.max(80,v0.w*f)),s=nw/v0.w;this.vb={x:m.x-(m.x-v0.x)*s,y:m.y-(m.y-v0.y)*s,w:nw,h:v0.h*s};this.applyVB();this.drawObjs();this.drawOverlays();return}
+    const d=this.drag; if(!d) return;
+    if(d.mode==='pan'){const k=this.k();this.vb.x=d.vb.x-(e.clientX-d.cx)*k;this.vb.y=d.vb.y-(e.clientY-d.cy)*k;this.applyVB();return}
+    const o=this.obj(this.sel); if(!o) return; const p=this.pt(e);
+    if(d.mode==='move'){o.x=d.ox+(p.x-d.sx);o.y=d.oy+(p.y-d.sy);d.moved=true}
+    else if(d.mode==='end'){let px=p.x,py=p.y;
+      if(e.shiftKey){const t=(px-d.fx)*d.ux+(py-d.fy)*d.uy;px=d.fx+d.ux*t;py=d.fy+d.uy*t}
+      const dx=px-d.fx,dy=py-d.fy,len=Math.hypot(dx,dy);
+      if(len>=FT){o.w=Math.round(len/FT*10)/10;o.x=(d.fx+px)/2;o.y=(d.fy+py)/2;
+        let ang=Math.atan2(dy,dx)*180/Math.PI+(d.which==='endA'?180:0);o.rot=((Math.round(ang)%360)+360)%360;d.moved=true}}
+    else if(d.mode==='rot'){let a=Math.atan2(p.y-o.y,p.x-o.x)*180/Math.PI+90;a=e.shiftKey?Math.round(a/15)*15:Math.round(a);o.rot=((a%360)+360)%360;d.moved=true}
+    this.drawObjs(); this.syncRotField();
+  },
+  up(e){
+    this.ptrs.delete(e.pointerId); if(this.ptrs.size<2) this.pinch=null;
+    const d=this.drag; this.drag=null; this.svg.classList.remove('panning');
+    if(d&&(d.mode==='move'||d.mode==='rot'||d.mode==='end')){ if(d.moved) touch(); else {this.undo.pop();this.updUndo()} }
+  },
+  syncRotField(){const o=this.obj(this.sel);if(!o)return;const r=document.getElementById('pRot'),rn=document.getElementById('pRotN');if(r)r.value=Math.round(o.rot||0);if(rn)rn.value=Math.round(o.rot||0);const pw=document.getElementById('pW');if(pw&&document.activeElement!==pw)pw.value=n1(o.w)},
+  key(e){
+    if(tab!=='diagram'||!this.svg) return;
+    if(e.target.matches('input,textarea,select')) return;
+    const mod=e.ctrlKey||e.metaKey;
+    if(mod&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?this.doRedo():this.doUndo();return}
+    if(mod&&e.key.toLowerCase()==='y'){e.preventDefault();this.doRedo();return}
+    const o=this.obj(this.sel); if(!o) return;
+    if(mod&&e.key.toLowerCase()==='d'){e.preventDefault();this.dup(o.id);return}
+    if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();this.remove(o.id);return}
+    if(e.key==='Escape'){this.sel=null;this.drawObjs();this.renderProps();return}
+    const step=e.shiftKey?15:3;
+    const mv={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[e.key];
+    if(mv){e.preventDefault();this.snapshot();o.x+=mv[0];o.y+=mv[1];this.drawObjs();touch();return}
+    if(e.key==='r'||e.key==='R'){e.preventDefault();this.snapshot();o.rot=(((o.rot||0)+(e.shiftKey?-15:15))%360+360)%360;this.drawObjs();this.syncRotField();touch()}
+  },
+
+  /* ---------- palette & properties ---------- */
+  renderPal(){
+    const groups={};for(const [k,c] of Object.entries(CAT))(groups[c.grp]??=[]).push(k);
+    document.getElementById('pal').innerHTML=Object.entries(groups).map(([g,ks])=>`<section><h3>${g}</h3><div class="palgrid">${ks.map(k=>{const c=CAT[k];const pw=k==='rail'?24:c.w;const o={t:k,w:pw,h:c.h,rot:c.tag?90:0,color:c.def||(c.col?(c.veh?VCOL[0]:'#0b57d0'):''),id:'p'+k,text:c.tag?c.text:(k==='text'?'Aa':'35')};const s=Math.min(52/(pw*FT),26/(c.h*FT),2.2)*(c.tag?0.62:1);
+      const inner=k==='text'?`<text text-anchor="middle" dominant-baseline="central" font-family="Arial" font-weight="700" font-size="14" fill="#1d2328">Aa</text>`:`<g transform="translate(${c.tag?-7:0} 0) scale(${Math.round(s*100)/100})">${drawObj(o)}</g>`;
+      return `<button class="pitem" draggable="true" data-obj="${k}" title="Add ${c.n}"><svg viewBox="-28 -15 56 30" aria-hidden="true">${inner}</svg>${c.n}</button>`}).join('')}</div></section>`).join('');
+  },
+  renderProps(){
+    const el=document.getElementById('props'); if(!el) return;
+    const o=this.obj(this.sel);
+    if(o){
+      const c=CAT[o.t];
+      el.innerHTML=`<h3>Selected · ${esc(c.n)}</h3>
+      ${o.t==='text'||o.t==='speed'||o.t==='measure'||c.tag?`<div class="frow"><label for="pText">${o.t==='measure'?'Label':'Text'}</label><input type="text" id="pText" data-o="text" value="${esc(o.text)}" placeholder="${o.t==='measure'?'Blank shows '+n1(o.w)+' ft':''}"></div>`:''}
+      ${o.t==='measure'?`<p class="kbd" style="margin:-2px 0 8px">Drag either blue end square to stretch or swing the line (Shift keeps the angle). Type a label such as 42 ft 6 in to override the length shown.</p>`:LINEAR.has(o.t)?`<p class="kbd" style="margin:-2px 0 8px">Drag either blue end square to change the length (Shift keeps the angle).</p>`:''}
+      ${o.t!=='text'&&o.t!=='measure'&&!c.tag?`<div class="frow"><label for="pLabel">Label</label><input type="text" id="pLabel" data-o="label" value="${esc(o.label)}" placeholder="e.g. Unit 1"></div>`:''}
+      ${c.col||o.t==='text'?`<div class="frow"><span class="lbl" style="font-size:12px;color:var(--muted);font-weight:600">Color</span><div class="swatches">${(o.t==='text'?['#1d2328','#c0392b','#0b57d0','#ffffff']:VCOL).map(v=>`<button class="sw" data-color="${v}" style="background:${v}" aria-label="Color ${v}" aria-pressed="${o.color===v}"></button>`).join('')}</div></div>`:''}
+      ${c.veh?`<div class="frow"><label for="pStyle">Show as</label><select id="pStyle" data-o="style"><option value="">Position at impact</option><option value="ghost"${o.style==='ghost'?' selected':''}>Earlier / final rest (ghost)</option></select></div>`:''}
+      ${['arrow','turnL','turnR'].includes(o.t)?`<div class="frow"><label for="pDash">Line</label><select id="pDash" data-o="dash"><option value="">Solid — actual path</option><option value="1"${o.dash?' selected':''}>Dashed — intended path</option></select></div>`:''}
+      <div class="frow"><label for="pRotN">${c.tag?'Arrow points°':'Rotation°'}</label><input type="number" id="pRotN" data-o="rot" value="${Math.round(o.rot||0)}" step="1"></div>
+      <div class="frow"><span></span><input type="range" id="pRot" data-o="rot" min="0" max="359" value="${Math.round(o.rot||0)}" aria-label="Rotation"></div>
+      <div class="btnrow"><button class="btn sm" data-rot="-90">↺ 90°</button><button class="btn sm" data-rot="-15">↺ 15°</button><button class="btn sm" data-rot="15">↻ 15°</button><button class="btn sm" data-rot="90">↻ 90°</button></div>
+      <div class="frow"><label for="pW">${o.t==='text'||c.tag?'Width ft':'Length ft'}</label><input type="number" id="pW" data-o="w" value="${n1(o.w)}" step="0.5" min="0.5"></div>
+      <div class="frow"><label for="pH">${o.t==='text'?'Text size ft':c.tag?'Height ft':'Width ft'}</label><input type="number" id="pH" data-o="h" value="${n1(o.h)}" step="0.5" min="0.5"></div>
+      <h3>Arrange</h3>
+      <div class="btnrow"><button class="btn sm" data-layer="front">Bring to front</button><button class="btn sm" data-layer="back">Send to back</button></div>
+      <div class="btnrow"><button class="btn sm" data-dup>Duplicate</button><button class="btn sm danger" data-rm>Delete</button><button class="btn sm" data-desel>Done</button></div>
+      <p class="kbd">Drag to move · drag the round handle to rotate (Shift snaps to 15°) · R rotates 15° · arrow keys nudge · Ctrl+D duplicates · Delete removes</p>`;
+      return;
+    }
+    const R=this.D.road;
+    const presets=[['4way','4-way'],['signal','Signalized'],['tee','T-intersection'],['skew','Skewed'],['straight','Straight road'],['divided','Divided hwy'],['round','Roundabout'],['lot','Parking lot'],['blank','Blank']];
+    const comp=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round((((b-(R.north||0))%360)+360)%360/45)%8];
+    el.innerHTML=`<h3>Road layout</h3>
+      <div class="presets">${presets.map(([k,l])=>`<button class="btn${R.preset===k?' on':''}" data-preset="${k}">${l}</button>`).join('')}</div>
+      <p class="kbd" style="margin-top:6px">Choosing a layout replaces the roads. Placed vehicles and objects stay.</p>
+      <h3>Settings</h3>
+      <div class="frow"><label for="rLane">Lane width ft</label><input type="number" id="rLane" data-r="laneFt" value="${R.laneFt}" min="8" max="16" step="0.5"></div>
+      <div class="frow"><label for="rNorth">North arrow°</label><input type="number" id="rNorth" data-r="north" value="${R.north||0}" step="5"></div>
+      ${R.kind==='round'?`<div class="frow"><label for="rRing">Circle radius ft</label><input type="number" id="rRing" data-r="ringR" value="${R.ringR}" min="30" step="5"></div><div class="frow"><label for="rRL">Circle lanes</label><input type="number" id="rRL" data-r="ringLanes" value="${R.ringLanes}" min="1" max="3"></div>`:''}
+      ${R.kind==='lot'?`<div class="frow"><label for="rLw">Lot width ft</label><input type="number" id="rLw" data-r="lot.w" value="${R.lot.w}" step="10"></div><div class="frow"><label for="rLh">Lot depth ft</label><input type="number" id="rLh" data-r="lot.h" value="${R.lot.h}" step="10"></div><div class="frow"><label for="rLy">Lot offset ft</label><input type="number" id="rLy" data-r="lot.y" value="${R.lot.y}" step="5"></div><div class="frow"><label for="rLr">Double rows</label><input type="number" id="rLr" data-r="lot.rows" value="${R.lot.rows}" min="1" max="6"></div><div class="frow"><label for="rLs">Stalls per row</label><input type="number" id="rLs" data-r="lot.stalls" value="${R.lot.stalls}" min="1" max="40"></div>`:''}
+      <h3>Roads entering the scene</h3>
+      ${R.legs.map((l,i)=>`<div class="leg${l.on?'':' off'}">
+        <div class="lh"><input type="checkbox" id="lOn${i}" data-l="${i}.on" ${l.on?'checked':''} aria-label="Show approach ${i+1}"><label for="lOn${i}">Approach ${i+1} · ${comp(l.b)}</label><span class="grow"></span><button class="btn sm" data-legdel="${i}" aria-label="Remove approach ${i+1}">✕</button></div>
+        <div class="g2">
+          <label style="grid-column:1/-1">Road name<input type="text" data-l="${i}.name" value="${esc(l.name)}"></label>
+          <label>Direction°<input type="number" data-l="${i}.b" value="${l.b}" step="5"></label>
+          <label>Control<select data-l="${i}.ctrl">${[['none','None'],['stop','Stop sign'],['yield','Yield'],['signal','Signal']].map(([v,t])=>`<option value="${v}"${l.ctrl===v?' selected':''}>${t}</option>`).join('')}</select></label>
+          <label>Lanes inbound<input type="number" data-l="${i}.lin" value="${l.lin}" min="0" max="6"></label>
+          <label>Lanes outbound<input type="number" data-l="${i}.lout" value="${l.lout}" min="0" max="6"></label>
+          <label>Center<select data-l="${i}.center">${[['double','Double yellow'],['dashed','Dashed yellow'],['median','Median'],['none','None']].map(([v,t])=>`<option value="${v}"${l.center===v?' selected':''}>${t}</option>`).join('')}</select></label>
+          ${l.center==='median'?`<label>Median ft<input type="number" data-l="${i}.median" value="${l.median}" min="2" step="2"></label>`:'<span></span>'}
+          <label class="chk"><input type="checkbox" data-l="${i}.xwalk" ${l.xwalk?'checked':''}>Crosswalk</label>
+          <label class="chk"><input type="checkbox" data-l="${i}.shoulder" ${l.shoulder?'checked':''}>Shoulders</label>
+          <div class="turnrow"><button type="button" class="btn sm" data-legturn="${i}.turnL" aria-pressed="${!!l.turnL}" ${l.lin?'':'disabled'}>${l.turnL?'✓':'+'} Left turn lane</button><button type="button" class="btn sm" data-legturn="${i}.turnR" aria-pressed="${!!l.turnR}" ${l.lin?'':'disabled'}>${l.turnR?'✓':'+'} Right turn lane</button>
+          ${(l.turnL||l.turnR)&&l.lin?`<label class="tlen">Turn lane length ft<input type="number" data-l="${i}.turnLen" value="${l.turnLen||100}" min="20" step="10"></label>`:''}</div>
+        </div></div>`).join('')}
+      <button class="btn sm" data-legadd>+ Add approach</button>
+      <h3>Diagram notes</h3>
+      <textarea class="dnotes" id="dNotes" data-dn aria-label="Diagram notes" placeholder="Legend, measurements, reference points">${esc(this.D.notes)}</textarea>
+      <p class="kbd">Direction is screen angle: 0° points up, 90° right. Inbound lanes travel toward the intersection. Scroll or pinch to zoom, drag empty space to pan.</p>`;
+  },
+  propInput(e,commit){
+    const t=e.target, o=this.obj(this.sel);
+    if(t.dataset.dn!==undefined){this.D.notes=t.value;touch();return}
+    if(t.dataset.o&&o){
+      let v=t.type==='number'||t.type==='range'?parseFloat(t.value):t.value;
+      if(t.type==='number'&&isNaN(v))return;
+      if(t.dataset.o==='w'||t.dataset.o==='h') v=Math.max(0.5,v);
+      if(t.dataset.o==='rot'){v=((v%360)+360)%360;}
+      if(t.dataset.o==='dash') v=!!t.value;
+      o[t.dataset.o]=v; this.drawObjs(); if(t.dataset.o==='rot')this.syncRotField(); touch(); return;
+    }
+    const R=this.D.road;
+    if(t.dataset.r){let v=parseFloat(t.value);if(isNaN(v))return;setP(R,t.dataset.r,v);this.drawRoad();this.drawOverlays();touch();return}
+    if(t.dataset.l){const [i,k]=t.dataset.l.split('.');const l=R.legs[+i];
+      let v=t.type==='checkbox'?t.checked:t.type==='number'?parseFloat(t.value):t.value; if(t.type==='number'&&isNaN(v))return;
+      if(k==='lin'||k==='lout')v=Math.max(0,Math.min(6,Math.round(v)));
+      l[k]=v; R.preset=''; this.drawRoad(); touch();
+      if(commit&&(t.type==='checkbox'||t.tagName==='SELECT'||k==='b'))this.renderProps();
+    }
+  },
+  propClick(e){
+    const b=e.target.closest('button'); if(!b) return; const o=this.obj(this.sel), R=this.D.road;
+    if(b.dataset.preset){this.snapshot();const nr=presetRoad(b.dataset.preset);nr.north=R.north||0;nr.laneFt=R.laneFt;this.D.road=nr;this.drawRoad();this.renderProps();this.drawOverlays();touch();return}
+    if(b.dataset.legadd!==undefined){this.snapshot();R.legs.push({on:true,name:'',b:45,lin:1,lout:1,center:'double',median:16,ctrl:'stop',xwalk:false,shoulder:false});R.preset='';this.drawRoad();this.renderProps();touch();return}
+    if(b.dataset.legturn){this.snapshot();const [i,k]=b.dataset.legturn.split('.');const l=R.legs[+i];l[k]=!l[k];l.turnLen=l.turnLen||100;R.preset='';this.drawRoad();this.renderProps();touch();return}
+    if(b.dataset.legdel){this.snapshot();R.legs.splice(+b.dataset.legdel,1);R.preset='';this.drawRoad();this.renderProps();touch();return}
+    if(!o) return;
+    if(b.dataset.color){this.snapshot();o.color=b.dataset.color;this.drawObjs();this.renderProps();touch();return}
+    if(b.dataset.rot){this.snapshot();o.rot=(((o.rot||0)+(+b.dataset.rot))%360+360)%360;this.drawObjs();this.syncRotField();touch();return}
+    if(b.dataset.layer){this.layer(o.id,b.dataset.layer);return}
+    if(b.dataset.dup!==undefined){this.dup(o.id);return}
+    if(b.dataset.rm!==undefined){this.remove(o.id);return}
+    if(b.dataset.desel!==undefined){this.sel=null;this.drawObjs();this.renderProps()}
+  },
+};
+document.addEventListener('keydown',e=>Dg.key(e));
+
+function compassSVG(north){
+  return `<svg width="54" height="54" viewBox="-27 -27 54 54"><circle r="25" fill="#fff" fill-opacity=".88" stroke="#1d2328" stroke-width="1"/><g transform="rotate(${north})"><polygon points="0,-20 6,4 0,0 -6,4" fill="#1d2328"/><polygon points="0,20 6,4 0,0 -6,4" fill="#fff" stroke="#1d2328" stroke-width=".8"/><text y="-9" x="0" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="700" fill="#fff" transform="translate(0,0)">N</text></g></svg>`;
+}
+function diagramShell(){
+  return `<div class="dg">
+    <aside class="pal" id="pal" aria-label="Objects to place"></aside>
+    <div class="stage" id="stage">
+      <svg id="scene" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Crash scene diagram">
+        <defs><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#d6cfc2"/><line x1="0" y1="0" x2="0" y2="8" stroke="#a69d8c" stroke-width="2"/></pattern></defs>
+        <rect x="-50000" y="-50000" width="100000" height="100000" fill="${C.ground}"/>
+        <g id="roadL" pointer-events="none"></g><g id="objL"></g><g id="selL"></g>
+      </svg>
+      <div class="tools" id="dtools">
+        <button class="btn" data-act="undo" id="dUndo" disabled>Undo</button><button class="btn" data-act="redo" id="dRedo" disabled>Redo</button>
+        <button class="btn" data-act="in" aria-label="Zoom in">＋</button><button class="btn" data-act="out" aria-label="Zoom out">－</button><button class="btn" data-act="fit">Fit</button>
+        <button class="btn" data-act="units">Place Units 1–${S.units.length}</button>
+      </div>
+      <div class="ovl compass" id="compOv"></div>
+      <div class="ovl scale" id="scaleOv"></div>
+    </div>
+    <aside class="props" id="props" aria-label="Diagram settings"></aside>
+  </div>`;
+}
+
+/* ==========================================================================
+   EXPORTS
+   ========================================================================== */
+async function exportPNG(){
+  const D=S.diagram;
+  // frame the content
+  let vb;
+  if(Dg.svg) vb={...Dg.vb}; else {
+    let xs=[-300,300],ys=[-200,200];for(const o of D.objects){xs.push(o.x-80,o.x+80);ys.push(o.y-80,o.y+80)}
+    vb={x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)};
+  }
+  const OW=1800, OH=Math.round(OW*vb.h/vb.w), TB=120, k=vb.w/OW;
+  const pxPerFt=FT/k, nice=[5,10,20,25,50,100,200,500].find(v=>v*pxPerFt>=120)||500, L=nice*pxPerFt;
+  const f=S.f;
+  const info=[['Case',f.caseNo],['Date / time',[f.crashDate,f.crashTime].filter(Boolean).join(' ')],['Location',[f.street,f.cross].filter(Boolean).join(' at ')],['Drawn by',f.investigator]];
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${OW}" height="${OH+TB}" viewBox="0 0 ${OW} ${OH+TB}">
+    <defs><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#d6cfc2"/><line x1="0" y1="0" x2="0" y2="8" stroke="#a69d8c" stroke-width="2"/></pattern><clipPath id="clip"><rect width="${OW}" height="${OH}"/></clipPath></defs>
+    <rect width="${OW}" height="${OH+TB}" fill="#ffffff"/>
+    <g clip-path="url(#clip)"><rect width="${OW}" height="${OH}" fill="${C.ground}"/>
+      <g transform="scale(${1/k}) translate(${-vb.x} ${-vb.y})">${roadSVG(D.road)}${D.objects.map(objSVG).join('')}</g></g>
+    <g transform="translate(${OW-80} 80) scale(2)">${compassSVG(D.road.north||0).replace(/^<svg[^>]*>|<\/svg>$/g,'')}</g>
+    <g transform="translate(30 ${OH-46})" font-family="Arial,Helvetica,sans-serif"><rect x="-10" y="-14" width="${n1(L+60)}" height="52" fill="#fff" fill-opacity=".85"/><rect x="0" y="12" width="${n1(L/2)}" height="10" fill="#1d2328"/><rect x="${n1(L/2)}" y="12" width="${n1(L/2)}" height="10" fill="#fff" stroke="#1d2328"/><text x="0" y="6" font-size="16" font-weight="700" fill="#1d2328">0</text><text x="${n1(L)}" y="6" font-size="16" font-weight="700" text-anchor="middle" fill="#1d2328">${nice} ft</text></g>
+    <rect y="${OH}" width="${OW}" height="${TB}" fill="#1f2a30"/>
+    <g font-family="Arial,Helvetica,sans-serif">
+      <text x="30" y="${OH+42}" font-size="26" font-weight="700" fill="#ffffff">Crash scene diagram</text>
+      <text x="30" y="${OH+80}" font-size="16" fill="#c9d3d7">${esc((D.notes||'Approximate scale. Not a survey.').slice(0,150))}</text>
+      ${info.map(([kk,v],i)=>`<text x="${720+i*270}" y="${OH+40}" font-size="13" font-weight="700" fill="#9fb0b7" letter-spacing="1">${kk.toUpperCase()}</text><text x="${720+i*270}" y="${OH+70}" font-size="18" font-weight="700" fill="#ffffff">${esc((v||'—').slice(0,26))}</text>`).join('')}
+    </g></svg>`;
+  try{
+    const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));
+    const img=new Image(); await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});
+    const cv=document.createElement('canvas'); cv.width=OW; cv.height=OH+TB; cv.getContext('2d').drawImage(img,0,0); URL.revokeObjectURL(url);
+    const blob=await new Promise(r=>cv.toBlob(r,'image/png'));
+    if(await saveFile(`${(f.caseNo||'crash')}-diagram.png`,blob)) toast('Diagram saved as PNG.');
+  }catch(err){ if(err?.code==='declined') return; toast('The diagram could not be exported. '+(err?.message||'')); }
+}
+/* ---------- Documents: files live in this browser (IndexedDB), never on a server ---------- */
+const IDB={p:null,
+  open(){ if(this.p) return this.p; this.p=new Promise((res,rej)=>{ let r; try{ r=indexedDB.open('cri-docs',1); }catch(e){ rej(e); return; }
+    r.onupgradeneeded=()=>r.result.createObjectStore('files'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); this.p.catch(()=>{this.p=null}); return this.p; },
+  async run(mode,fn){ const db=await this.open(); return new Promise((res,rej)=>{ const tx=db.transaction('files',mode), st=tx.objectStore('files'); let out; const rq=fn(st); if(rq) rq.onsuccess=()=>{out=rq.result};
+    tx.oncomplete=()=>res(out); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error); }); },
+  put(k,v){ return this.run('readwrite',st=>st.put(v,k)); }, get(k){ return this.run('readonly',st=>st.get(k)); }, del(k){ return this.run('readwrite',st=>st.delete(k)); }
+};
+const DOC_CATS=['Police crash report','Citation copy','Written witness statement','Driver statement','Scene photos','Vehicle damage photos','Dashcam / video','Subpoena','Discovery documents','Letter of representation / preservation letter','Medical records','Repair estimate / invoice','Drug & alcohol results','Other'];
+const DOC_MARKS=['Confidential','Attorney–client privileged','Attorney work product'];
+const fmtSize=b=>b>=1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
+const thumbURLs=new Map(); let lastDocCat=DOC_CATS[0];
+function docsHTML(){
+  const opts=(v)=>DOC_CATS.map(c=>`<option${c===v?' selected':''}>${esc(c)}</option>`).join('');
+  let h=`<p class="note"><b>These files never leave this computer.</b> They are kept inside this web browser and are not uploaded to GitHub or any website, so other people who open this page cannot see them. To give a case to someone else, use ☰ Cases › <b>Save case file</b> with a password. The documents go inside that file, and only someone with the password can open it.</p>`;
+  h+=`<section class="sheet"><div class="band">Add documents</div><div class="dz" id="dropZone">
+    <div class="dzrow"><label for="docCat">Document type</label><select id="docCat">${opts(lastDocCat)}</select>
+    <button class="btn primary" type="button" data-docpick>Choose files…</button><button class="btn" type="button" data-doclink>+ Add a link instead</button></div>
+    <p class="dzhint">Or drag files onto this box. PDFs, photos, Word and Excel files, and video clips are accepted. Use “Add a link” for files kept on SharePoint, OneDrive, or a claim portal.</p></div></section>`;
+  if(!S.docs.length) return h+`<section class="sheet"><div class="band">Documents on file</div><div class="empty">No documents yet.</div></section>`;
+  const groups=DOC_CATS.map(c=>[c,S.docs.map((d,i)=>[d,i]).filter(([d])=>(DOC_CATS.includes(d.cat)?d.cat:'Other')===c)]).filter(g=>g[1].length);
+  for(const [cat,items] of groups){
+    h+=`<section class="sheet"><div class="band">${esc(cat)}<span class="grow"></span><span>${items.length}</span></div>`;
+    for(const [d,i] of items){
+      const ext=(d.name.split('.').pop()||'').slice(0,4).toUpperCase(), isImg=/^image\//.test(d.type||'');
+      const safe=/^https?:\/\//i.test(d.link||'')?d.link:'';
+      h+=`<div class="doc"><div class="dthumb">${d.stored&&isImg?`<img data-thumb="${esc(S.id+'/'+d.id)}" alt="">`:`<span class="ficon">${d.stored?esc(ext||'FILE'):'LINK'}</span>`}</div>
+        <div class="dmain">${d.stored?`<div class="dname">${esc(d.name)}</div>`:`<input class="dname-in" id="f-docs_${i}_name" data-p="docs.${i}.name" value="${esc(d.name)}" placeholder="Document name">`}
+          <div class="dmeta">${d.stored?fmtSize(d.size)+' · ':''}added ${new Date(d.added).toLocaleDateString()}${d.mark?` · <span class="pill bad">${esc(d.mark)}</span>`:''}</div>
+          <div class="dfields">
+            <label>Type<select id="f-docs_${i}_cat" data-p="docs.${i}.cat">${opts(d.cat)}</select></label>
+            <label>Marking<select id="f-docs_${i}_mark" data-p="docs.${i}.mark"><option value="">None</option>${DOC_MARKS.map(m=>`<option${m===d.mark?' selected':''}>${m}</option>`).join('')}</select></label>
+            <label class="wide">Description<input id="f-docs_${i}_desc" data-p="docs.${i}.desc" value="${esc(d.desc)}" placeholder="e.g. Report no. 26-11842, received from officer"></label>
+            ${d.stored?'':`<label class="wide">Link<input id="f-docs_${i}_link" data-p="docs.${i}.link" value="${esc(d.link)}" placeholder="https://… link to the file in SharePoint, OneDrive, or a claim portal"></label>`}
+          </div></div>
+        <div class="dact">${d.stored?`<button class="btn sm" data-docopen="${i}">Open</button><button class="btn sm" data-docdl="${i}">Download</button>`:(safe?`<a class="btn sm" href="${esc(safe)}" target="_blank" rel="noopener noreferrer">Open link</a>`:'')}${delBtn('docs',i)}</div></div>`;
+    }
+    h+='</section>';
+  }
+  return h;
+}
+async function loadThumbs(){
+  for(const img of document.querySelectorAll('img[data-thumb]')){
+    const k=img.dataset.thumb;
+    try{ if(!thumbURLs.has(k)){ const b=await IDB.get(k); if(!b) continue; thumbURLs.set(k,URL.createObjectURL(b)); } img.src=thumbURLs.get(k); }catch(_){}
+  }
+}
+async function addDocs(files){
+  const cat=document.getElementById('docCat')?.value||'Other'; let n=0;
+  for(const f of files){
+    if(f.size>200*1048576){ toast(`${f.name} is larger than 200 MB and was not added.`); continue; }
+    const d={id:uid(),cat,name:f.name,type:f.type,size:f.size,desc:'',mark:'',added:new Date().toISOString(),stored:true};
+    try{ await IDB.put(S.id+'/'+d.id,f); S.docs.push(d); n++; }
+    catch(err){ toast('This browser would not store the file. Private or incognito windows block file storage — use a normal window.'); break; }
+  }
+  if(n){ touch(); renderTab(); toast(`Added ${n} document${n>1?'s':''}.`); }
+}
+async function openDoc(i,download){
+  const d=S.docs[i]; if(!d) return;
+  let blob=null; try{ blob=await IDB.get(S.id+'/'+d.id); }catch(_){}
+  if(!blob){ toast('This file is not on this computer. Ask the person who added it to send you the case file.'); return; }
+  if(download){ try{ await saveFile(d.name,blob); }catch(err){ toast('Could not save the file. '+(err?.message||'')); } return; }
+  const url=URL.createObjectURL(new Blob([blob],{type:d.type||blob.type||'application/octet-stream'}));
+  const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+view.addEventListener('change',e=>{if(e.target.id==='docCat') lastDocCat=e.target.value;});
+view.addEventListener('dragover',e=>{const z=e.target.closest('#dropZone'); if(z){e.preventDefault(); z.classList.add('over');}});
+view.addEventListener('dragleave',e=>{const z=e.target.closest('#dropZone'); if(z) z.classList.remove('over');});
+view.addEventListener('drop',e=>{const z=e.target.closest('#dropZone'); if(!z) return; e.preventDefault(); z.classList.remove('over'); if(e.dataTransfer.files.length) addDocs([...e.dataTransfer.files]);});
+
+/* ---------- case-file packing: documents travel inside the file; optional password (AES-256-GCM) ---------- */
+const blobToB64=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]||'');r.onerror=()=>rej(r.error);r.readAsDataURL(b)});
+function b64ToBytes(s){const bin=atob(s),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
+async function pwKey(pw,salt){const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
+async function sealText(text,pw){const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},await pwKey(pw,salt),new TextEncoder().encode(text));
+  return JSON.stringify({app:'crash-investigation-workbook',encrypted:true,v:1,salt:await blobToB64(new Blob([salt])),iv:await blobToB64(new Blob([iv])),data:await blobToB64(new Blob([ct]))});}
+async function openText(obj,pw){const key=await pwKey(pw,b64ToBytes(obj.salt));
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(obj.iv)},key,b64ToBytes(obj.data));return new TextDecoder().decode(pt)}
+
+/* Saves a file: through the Claude viewer when hosted there, otherwise a normal browser download. */
+async function saveFile(filename,blob){
+  if(DL){
+    try{ await DL.save({filename,data:blob}); return true; }
+    catch(err){ if(err?.code==='declined') return false; throw err; }
+  }
+  const url=URL.createObjectURL(blob), a=document.createElement('a');
+  a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000); return true;
+}
+async function exportCase(){
+  const name=`${(S.f.caseNo||'crash-investigation').replace(/[^\w.-]+/g,'_')}.json`;
+  const pw=document.getElementById('casePw')?.value||'';
+  try{
+    const files={}; let missing=0;
+    for(const d of S.docs){ if(!d.stored) continue; const b=await IDB.get(S.id+'/'+d.id).catch(()=>null); if(b) files[d.id]=await blobToB64(b); else missing++; }
+    let data=JSON.stringify({app:'crash-investigation-workbook',version:2,savedAt:new Date().toISOString(),state:S,files});
+    if(pw) data=await sealText(data,pw);
+    if(await saveFile(name,new Blob([data],{type:'application/json'}))) toast((pw?'Password-protected case file saved.':'Case file saved — not password-protected.')+(missing?` ${missing} document(s) were not on this computer and were left out.`:''));
+  }
+  catch(err){ toast('The case file could not be saved. '+(err?.message||'')); }
+}
+async function importCase(file){
+  try{
+    let obj=JSON.parse(await file.text());
+    if(obj.encrypted){ const pw=document.getElementById('casePw')?.value||'';
+      if(!pw) throw new Error('This case file is password-protected. Type the password in the box above, then open it again.');
+      try{ obj=JSON.parse(await openText(obj,pw)); }catch(_){ throw new Error('Wrong password for this case file.'); } }
+    const st=obj.state||obj;
+    if(!st||!st.f||!Array.isArray(st.units)) throw new Error('This is not a crash investigation case file.');
+    if(dirty) await save();
+    st.id=st.id||uid();
+    if(obj.files){ for(const d of (st.docs||[])){ const b=obj.files[d.id]; if(b){ await IDB.put(st.id+'/'+d.id,new Blob([b64ToBytes(b)],{type:d.type||''})); d.stored=true; } } }
+    const existing=cases.find(c=>c.id===st.id);
+    cases=[{id:st.id,caseNo:st.f.caseNo||'',crashDate:st.f.crashDate||'',street:st.f.street||'',fleet:st.f.fleet||'',status:st.f.status||'',updatedAt:Date.now(),state:st},...cases.filter(c=>c.id!==st.id)];
+    openCase(st.id); dirty=true; save();
+    toast(existing?'Case file opened — replaced the saved copy of this case.':'Case file opened.');
+  }catch(err){ toast(err?.message||'That file could not be opened.'); }
+}
+function valStr(v){return Array.isArray(v)?v.join(', '):(v??'')}
+async function exportXLSX(){
+  if(!window.XLSX){toast('The Excel library did not load. Check your connection and reload.');return}
+  const wb=XLSX.utils.book_new(), d=determination();
+  const sum=[['Section','Field','Value']];
+  const pushDefs=(defs,obj,ctx)=>{let sec='';for(const x of defs){if(x.h){sec=x.h;continue}if(x.t==='calc'){sum.push([sec,x.l,x.calc(ctx)]);continue}sum.push([sec,x.l,valStr(obj[x.k])])}};
+  pushDefs(SCHEMA.overview,S.f,{s:S});
+  if(d.cmv){sum.push(['DOT determination','DOT recordable accident (390.5)',d.recordable?'Yes':'No']);sum.push(['DOT determination','Post-accident testing required (382.303)',d.test?'Yes':'No'])}
+  pushDefs(SCHEMA.conditions,S.f,{s:S}); pushDefs(SCHEMA.analysis,S.f,{s:S}); pushDefs(SCHEMA.review,S.f,{s:S}); pushDefs(SCHEMA.legal,S.f,{s:S});
+  sum.push(['Scene diagram','Diagram notes',S.diagram.notes||'']);
+  const ws1=XLSX.utils.aoa_to_sheet(sum); ws1['!cols']=[{wch:28},{wch:42},{wch:70}]; XLSX.utils.book_append_sheet(wb,ws1,'Summary');
+  // units: one column per unit
+  const uRows=[['Field',...S.units.map((u,i)=>'Unit '+(i+1))]];
+  for(const x of SCHEMA.unit){ if(x.h){uRows.push([x.h.toUpperCase()]);continue} uRows.push([x.l,...S.units.map(u=>valStr(u[x.k]))]) }
+  const ws2=XLSX.utils.aoa_to_sheet(uRows); ws2['!cols']=[{wch:30},...S.units.map(()=>({wch:26}))]; XLSX.utils.book_append_sheet(wb,ws2,'Vehicles & Drivers');
+  const table=(defs,list,name)=>{const cols=defs.filter(x=>!x.h);const rows=[['#',...cols.map(x=>x.l)],...list.map((it,i)=>[i+1,...cols.map(x=>valStr(it[x.k]))])];const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=[{wch:4},...cols.map(x=>({wch:x.t==='area'?50:22}))];XLSX.utils.book_append_sheet(wb,ws,name)};
+  table(SCHEMA.witness,S.witnesses,'Witnesses'); table(SCHEMA.injured,S.injured,'Injuries'); table(SCHEMA.action,S.actions,'Corrective Actions'); table(SCHEMA.property,S.property,'Third-Party Property'); table(SCHEMA.attorney,S.attorneys,'Attorneys'); table(SCHEMA.lhRequest,S.lhRequests,'Attorney Requests');
+  { const rows=[['#','Type','Document','Marking','Description','Size','Added','Link']];
+    S.docs.forEach((d,i)=>rows.push([i+1,d.cat,d.name,d.mark||'',d.desc||'',d.stored?fmtSize(d.size):'',new Date(d.added).toLocaleDateString(),d.link||'']));
+    const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:26},{wch:36},{wch:22},{wch:44},{wch:10},{wch:12},{wch:40}]; XLSX.utils.book_append_sheet(wb,ws,'Documents'); }
+  const oRows=[['Object','Label','X (ft)','Y (ft)','Rotation (deg)','Length (ft)','Width (ft)','Shown as']];
+  for(const o of S.diagram.objects) oRows.push([CAT[o.t]?.n||o.t,(o.t==='text'||CAT[o.t]?.tag)?o.text:o.t==='measure'?(o.text||n1(o.w)+' ft'):o.label,n1(o.x/FT),n1(o.y/FT),Math.round(o.rot||0),o.w,o.h,o.style==='ghost'?'Ghost':'']);
+  const ws5=XLSX.utils.aoa_to_sheet(oRows); ws5['!cols']=[{wch:18},{wch:12},{wch:9},{wch:9},{wch:13},{wch:11},{wch:10},{wch:10}]; XLSX.utils.book_append_sheet(wb,ws5,'Diagram Objects');
+  try{ const buf=XLSX.write(wb,{type:'array',bookType:'xlsx'}); if(await saveFile(`${S.f.caseNo||'crash-investigation'}.xlsx`,new Blob([buf]))) toast('Excel workbook saved.'); }
+  catch(err){ if(err?.code==='declined') return; toast('The workbook could not be exported. '+(err?.message||'')); }
+}
+
+/* ==========================================================================
+   SAVING — shared case database when available, this browser otherwise
+   ========================================================================== */
+function touch(){ dirty=true; userTouched=true; setSaveState(); clearTimeout(saveTimer); saveTimer=setTimeout(save,2500); }
+function setSaveState(txt){
+  const el=document.getElementById('saveState');
+  if(txt){el.textContent=txt;return}
+  if(storeMode==='pending'){el.textContent='Connecting…';return}
+  if(saving){el.textContent='Saving…';return}
+  if(dirty){el.textContent='Unsaved changes';return}
+  el.textContent= lastSaved? `Saved ${lastSaved.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}${storeMode==='local'?' · this browser':''}` : (storeMode==='local'?'Saves to this browser':'Not saved');
+}
+function docOf(){return {caseNo:S.f.caseNo||'',crashDate:S.f.crashDate||'',street:S.f.street||'',fleet:S.f.fleet||'',status:S.f.status||'',updatedAt:Date.now(),state:JSON.parse(JSON.stringify(S))}}
+async function save(){
+  clearTimeout(saveTimer);
+  if(storeMode==='pending'){saveTimer=setTimeout(save,1500);return}
+  if(saving){saveAgain=true;return}
+  if(!dirty) {setSaveState();return}
+  saving=true; dirty=false; setSaveState();
+  const doc=docOf();
+  try{
+    if(storeMode==='db') await DB.collection('cases').doc(S.id).set(doc);
+    else { const all=localCases(); all[S.id]=doc; localStorage.setItem('cri.cases',JSON.stringify(all)); refreshLocal(); }
+    everSaved=true; lastSaved=new Date();
+  }catch(err){
+    dirty=true; setSaveState(err?.code==='permission_denied'?'You can view but not save this case':'Save failed — retrying'); saving=false;
+    if(err?.code!=='permission_denied') saveTimer=setTimeout(save,6000); return;
+  }
+  saving=false; if(saveAgain){saveAgain=false; if(dirty) return save();} setSaveState();
+}
+function localCases(){try{return JSON.parse(localStorage.getItem('cri.cases')||'{}')}catch(_){return {}}}
+function refreshLocal(){const all=localCases();cases=Object.entries(all).map(([id,d])=>({id,...d})).sort((a,b)=>b.updatedAt-a.updatedAt);renderDrawer(false)}
+function openCase(id){
+  const c=cases.find(x=>x.id===id); if(!c) return;
+  S=JSON.parse(JSON.stringify(c.state)); S.id=id;
+  if(S.f.caseNoManual===undefined) S.f.caseNoManual=!!S.f.caseNo;
+  if(S.f.citationDetail && !Array.isArray(S.f.citations)){S.f.citations=[S.f.citationDetail];delete S.f.citationDetail}
+  S.witnesses??=[];S.injured??=[];S.actions??=[];S.property??=[];S.attorneys??=[];S.lhRequests??=[];S.docs??=[];S.units??=[];S.diagram??={road:defaultRoad(),objects:[],notes:''};
+  dirty=false; everSaved=true; userTouched=false; lastSaved=new Date(c.updatedAt); Dg.sel=null; Dg.undo=[]; Dg.redo=[];
+  setSaveState(); renderTab(); closeDrawer();
+}
+async function startNew(){ if(dirty) await save(); S=blankState(); dirty=false; everSaved=false; userTouched=false; lastSaved=null; Dg.sel=null; Dg.undo=[]; tab='overview'; renderTabs(); renderTab(); setSaveState(); closeDrawer(); }
+async function deleteCase(id){
+  const victim=cases.find(c=>c.id===id)?.state||(id===S.id?S:null);
+  for(const d of (victim?.docs||[])) if(d.stored) IDB.del(id+'/'+d.id).catch(()=>{});
+  try{ if(storeMode==='db') await DB.collection('cases').doc(id).delete(); else {const all=localCases();delete all[id];localStorage.setItem('cri.cases',JSON.stringify(all));refreshLocal()} }
+  catch(err){toast('Could not delete: '+(err?.message||err?.code||''));return}
+  if(id===S.id){S=blankState();dirty=false;everSaved=false;lastSaved=null;renderTab();setSaveState()}
+  toast('Case deleted.');
+}
+
+/* drawer */
+let drawerOpen=false, pendingCaseDel=null;
+function openDrawer(){drawerOpen=true;renderDrawer(true)}
+function closeDrawer(){drawerOpen=false;pendingCaseDel=null;document.getElementById('drawerHost').innerHTML=''}
+function renderDrawer(focus){
+  if(!drawerOpen) return;
+  const pill=s=>`<span class="pill ${s==='Closed'?'ok':s==='Open'?'warn':'mut'}">${esc(s||'Open')}</span>`;
+  const list=cases.length? cases.map(c=>`<div class="caserow${c.id===S.id?' cur':''}" role="button" tabindex="0" data-open="${c.id}">
+      <span class="no">${esc(c.caseNo||'Untitled')}</span>${pill(c.status)}
+      <span class="meta">${esc([c.crashDate,c.street,c.fleet==='Commercial motor vehicle (CMV)'?'CMV':c.fleet].filter(Boolean).join(' · ')||'No details yet')}</span>
+      <span class="meta">Updated ${new Date(c.updatedAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+        ${pendingCaseDel===c.id?`<span class="confirm" style="float:right"><button class="btn sm danger" data-cdel="${c.id}" data-confirm="1">Delete case</button><button class="btn sm" data-ckeep>Keep</button></span>`:`<button class="btn sm" style="float:right" data-cdel="${c.id}">Delete</button>`}</span>
+    </div>`).join('') : `<div class="empty">${storeMode==='pending'?'Loading saved cases…':'No saved investigations yet. Cases save automatically as you fill them in.'}</div>`;
+  document.getElementById('drawerHost').innerHTML=`<div class="drawer" id="drawer"><div class="panel" role="dialog" aria-modal="true" aria-label="Saved investigations">
+    <div style="display:flex;align-items:center;gap:8px"><h2>Investigations</h2><span style="flex:1"></span><button class="btn sm" id="dClose">Close</button></div>
+    <button class="btn primary" id="dNew">+ New investigation</button>
+    <label class="pwrow" for="casePw">Case file password<input type="password" id="casePw" autocomplete="new-password" placeholder="Recommended — required to open the file"></label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="dExportCase">Save case file</button><button class="btn" id="dImportCase">Open case file</button></div>
+    <p class="note" style="margin:0">Give the password to the other person separately — by phone or text, never in the same email as the file. A lost password cannot be recovered.</p>
+    <p class="note" style="margin:0">A case file (.json) holds the whole investigation, diagram included. Email it or store it on a shared drive, and anyone can open it here to keep working.</p>
+    ${storeMode==='local'?'<p class="note" style="margin:0">Cases save automatically in this browser on this computer. Use Save case file to keep a copy or pass a case to someone else.</p>':storeMode==='db'?'<p class="note" style="margin:0">Cases are shared with everyone who can open this workbook.</p>':''}
+    <div class="caselist">${list}</div></div></div>`;
+  if(focus) document.getElementById('dNew')?.focus();
+}
+document.getElementById('drawerHost').addEventListener('click',e=>{
+  if(e.target.id==='drawer'||e.target.id==='dClose'){closeDrawer();return}
+  if(e.target.id==='dNew'){startNew();return}
+  if(e.target.id==='dExportCase'){exportCase();return}
+  if(e.target.id==='dImportCase'){document.getElementById('caseFile').click();return}
+  const del=e.target.closest('[data-cdel]');
+  if(del){e.stopPropagation(); if(del.dataset.confirm){pendingCaseDel=null;deleteCase(del.dataset.cdel);} else pendingCaseDel=del.dataset.cdel; renderDrawer(); return}
+  if(e.target.closest('[data-ckeep]')){pendingCaseDel=null;renderDrawer();return}
+  const row=e.target.closest('[data-open]'); if(row){ if(dirty) save(); openCase(row.dataset.open); }
+});
+document.getElementById('drawerHost').addEventListener('keydown',e=>{
+  if(e.key==='Escape')closeDrawer();
+  if(e.key==='Enter'&&e.target.dataset?.open){openCase(e.target.dataset.open)}
+});
+
+function toast(msg){const h=document.getElementById('toastHost');h.innerHTML=`<div class="toast" role="status">${esc(msg)}</div>`;clearTimeout(toast.t);toast.t=setTimeout(()=>h.innerHTML='',3200)}
+
+/* header buttons */
+document.getElementById('openCases').onclick=openDrawer;
+document.getElementById('btnSave').onclick=()=>{dirty=true;save()};
+document.getElementById('btnXlsx').onclick=exportXLSX;
+document.getElementById('btnPng').onclick=exportPNG;
+document.getElementById('docFile').addEventListener('change',e=>{const fs=[...e.target.files]; e.target.value=''; if(fs.length) addDocs(fs);});
+document.getElementById('caseFile').addEventListener('change',e=>{const f=e.target.files[0]; if(f) importCase(f); e.target.value='';});
+
+/* sticky offsets */
+function measure(){const b=document.getElementById('bar').offsetHeight,t=document.getElementById('tabs').offsetHeight;document.documentElement.style.setProperty('--barh',b+'px');document.documentElement.style.setProperty('--tabh',t+'px')}
+new ResizeObserver(measure).observe(document.getElementById('bar'));
+
+/* ==========================================================================
+   BOOT
+   ========================================================================== */
+try{const t=localStorage.getItem('cri.tab');if(t&&TABS.some(x=>x[0]===t))tab=t}catch(_){}
+renderTabs(); renderTab(); measure(); setSaveState();
+
+(async()=>{
+  const use = window.claude?.use ? n=>window.claude.use(n).catch(()=>null) : async()=>null;
+  const [db,dl]=await Promise.all([use('db'),use('downloads')]);
+  DB=db; DL=dl;
+  if(DB){
+    storeMode='db';
+    let first=true;
+    DB.collection('cases').orderBy('updatedAt','desc').onSnapshot(snap=>{
+      cases=snap.docs.map(d=>({id:d.id,...d.data()}));
+      if(first){first=false; if(!userTouched && !everSaved && cases.length) openCase(cases[0].id);}
+      renderDrawer(false); updateHeader(); setSaveState();
+    },err=>{setSaveState('Could not load saved cases');});
+  } else {
+    storeMode='local'; refreshLocal();
+    if(!userTouched && cases.length) openCase(cases[0].id);
+  }
+  updateHeader(); setSaveState(); if(dirty) save();
+})();
+</script>
+
+</body>
+</html>
