@@ -268,8 +268,6 @@ overview: [
   {k:'agency', l:'Agency', t:'text'},
   {k:'policeNo', l:'Police report no.', t:'text', mono:1},
   {k:'officer', l:'Officer / badge', t:'text'},
-  {k:'citation', l:'Citation issued', t:'sel', o:['None','Company driver','Other driver','Both drivers','Pending']},
-  {k:'citations', l:'Citation / violation', t:'list', span:3, add:'+ Add citation'},
   {h:'Emergency response & towing'},
   {k:'ems', l:'EMS responded', t:'sel', o:YNU},
   {k:'fire', l:'Fire dept. responded', t:'sel', o:YNU},
@@ -334,6 +332,8 @@ unit: [
   {k:'injury', l:'Driver injury', t:'sel', o:['None','Possible','Minor','Serious','Fatal']},
   {k:'phoneUse', l:'Phone use', t:'sel', o:['None','Hands-free','Handheld','Unknown']},
   {k:'impair', l:'Impairment', t:'sel', o:['None suspected','Suspected alcohol','Suspected drugs','Fatigue','Medical event','Unknown']},
+  {k:'cited', l:'Citation issued to this driver', t:'sel', o:['Yes','No','Pending']},
+  {k:'citations', l:'Citation / violation', t:'list', span:3, add:'+ Add citation', show:c=>['Yes','Pending'].includes(c.u?.cited)},
   {h:'CMV compliance (49 CFR)', show:coCMV},
   {k:'gvwr', l:'GVWR / GCWR (lbs)', t:'num', show:coCMV},
   {k:'trailerNo', l:'Trailer no.', t:'text', mono:1, show:coCMV},
@@ -534,7 +534,7 @@ function determination(){
   const fatal=f.severity==='Fatality' || S.injured.some(p=>p.treatment==='Fatal');
   const transported=f.severity==='Injury – treated away from scene' || S.injured.some(p=>/Transported|Self-transported|Admitted/.test(p.treatment||''));
   const towDisabled=/disabling/.test(f.tow||'');
-  const citedCo=['Company driver','Both drivers'].includes(f.citation);
+  const citedCo=S.units.some(u=>u.role==='Company vehicle'&&u.cited==='Yes');
   const known=!!f.severity && !!f.tow;
   const recordable=fatal||transported||towDisabled;
   const test=fatal||(citedCo&&(transported||towDisabled));
@@ -1766,6 +1766,18 @@ function openCase(id){
   if(S.f.caseNoManual===undefined) S.f.caseNoManual=!!S.f.caseNo;
   if(S.f.citations&&!Array.isArray(S.f.citations)&&typeof S.f.citations==='object') S.f.citations=Object.keys(S.f.citations).sort((a,b)=>a-b).map(k=>S.f.citations[k]);
   if(S.f.citationDetail && !Array.isArray(S.f.citations)){S.f.citations=[S.f.citationDetail];delete S.f.citationDetail}
+  // cases saved before citations moved to each driver
+  if(S.f.citation!==undefined||S.f.citations!==undefined){
+    const co=S.units.find(u=>u.role==='Company vehicle'), ot=S.units.find(u=>u.role&&u.role!=='Company vehicle');
+    const who=S.f.citation||'', list=(S.f.citations||[]).filter(Boolean);
+    const mark=(u,v)=>{ if(u){ u.cited=u.cited||v; } };
+    if(who==='Company driver'||who==='Both drivers') mark(co,'Yes');
+    if(who==='Other driver'||who==='Both drivers') mark(ot,'Yes');
+    if(who==='Pending') mark(co,'Pending');
+    if(who==='None'){ mark(co,'No'); mark(ot,'No'); }
+    if(list.length){ const tgt=(who==='Other driver'?ot:co)||ot||S.units[0]; if(tgt){ tgt.citations=(tgt.citations||[]).concat(list); tgt.cited=tgt.cited||'Yes'; } }
+    delete S.f.citation; delete S.f.citations;
+  }
   S.witnesses??=[];S.injured??=[];S.actions??=[];S.reviewers??=[];S.property??=[];S.attorneys??=[];S.lhRequests??=[];S.docs??=[];S.units??=[];S.diagram??={road:defaultRoad(),objects:[],notes:''};
   dirty=false; everSaved=true; userTouched=false; lastSaved=new Date(c.updatedAt); Dg.sel=null; Dg.undo=[]; Dg.redo=[];
   setSaveState(); renderTab(); closeDrawer();
