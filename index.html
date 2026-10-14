@@ -1592,7 +1592,7 @@ const IDB={p:null,
     tx.oncomplete=()=>res(out); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error); }); },
   put(k,v){ return this.run('readwrite',st=>st.put(v,k)); }, get(k){ return this.run('readonly',st=>st.get(k)); }, del(k){ return this.run('readwrite',st=>st.delete(k)); }
 };
-const DOC_CATS=['Police crash report','Citation copy','Written witness statement','Driver statement','Scene photos','Vehicle damage photos','Dashcam / video','Subpoena','Discovery documents','Letter of representation / preservation letter','Medical records','Repair estimate / invoice','Drug & alcohol results','Other'];
+const DOC_CATS=['Police crash report','Citation copy','Written witness statement','Driver statement','Scene photos','Vehicle damage photos','Dashcam / video','Subpoena','Discovery documents','Letter of representation / preservation letter','Medical records','Repair estimate / invoice','Drug & alcohol results','DVIR','Other reports','Other'];
 const DOC_MARKS=['Confidential','Attorney–client privileged','Attorney work product'];
 const fmtSize=b=>b>=1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
 const thumbURLs=new Map(); let lastDocCat=DOC_CATS[0];
