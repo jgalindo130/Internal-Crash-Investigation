@@ -82,6 +82,10 @@ main.wide{max-width:none;padding-block:0;padding-inline:0}
 .chips{display:flex;flex-wrap:wrap;gap:5px;padding:3px 0}
 .chip{border:1px solid var(--rule-strong);background:var(--field);border-radius:3px;padding:2px 8px;font-size:12.5px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.na-row{display:flex;gap:6px;align-items:center}
+.na-row input{flex:1;min-width:0}
+.na-row input:disabled{opacity:.35}
+.na-row .btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .mlist{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:2px 0}
 .mrow{display:flex;align-items:center;gap:6px;width:100%}
 .mrow input{flex:1;border-bottom:1px dashed var(--rule)!important}
@@ -221,11 +225,15 @@ const YNU = ['Yes','No','Unknown'];
 const YN = ['Yes','No'];
 const isCMV = c => c.s.f.fleet === 'Commercial motor vehicle (CMV)';
 const isCo = c => (c.u?.role||'') === 'Company vehicle';
+const CMVV = 'Commercial motor vehicle (CMV)';
+const isVeh = c => !['Pedestrian','Cyclist'].includes(c.u?.role||'');
+const unitCMV = c => c.u?.vclass===CMVV || (isCo(c)&&isCMV(c));      // this unit is a CMV (any party)
+const coCMV = c => isCo(c) && (isCMV(c) || c.u?.vclass===CMVV);       // company CMV → 49 CFR section
 
 const BODY_TYPES = [
   {g:'Light fleet', o:['Sedan','SUV','Pickup','Cargo van','Passenger van','Box truck (non-CDL)']},
   {g:'Commercial motor vehicle', o:['Tractor-trailer','Tractor (bobtail)','Straight truck','Tanker','Tank truck (straight)','Flatbed','Dump truck','Service / utility truck','Bus']},
-  {g:'Other', o:['Motorcycle','Bicycle','Pedestrian','Other']}
+  {g:'Other', o:['Farm tractor','Farm equipment / implement','Motorcycle','Bicycle','Pedestrian','Other']}
 ];
 
 const SCHEMA = {
@@ -255,7 +263,6 @@ overview: [
   {k:'severity', l:'Severity', t:'sel', o:['Property damage only','Injury – treated at scene','Injury – treated away from scene','Fatality']},
   {k:'hitRun', l:'Hit and run', t:'sel', o:YN},
   {k:'firstHarm', l:'First harmful event', t:'text'},
-  {k:'description', l:'Brief description of what happened', t:'area', span:4, rows:4},
   {h:'Law enforcement'},
   {k:'policeResp', l:'Police responded', t:'sel', o:YNU},
   {k:'agency', l:'Agency', t:'text'},
@@ -293,7 +300,11 @@ conditions: [
 unit: [
   {h:'Vehicle'},
   {k:'role', l:'Role', t:'sel', o:['Company vehicle','Other party vehicle','Parked vehicle','Pedestrian','Cyclist']},
+  {k:'vclass', l:'Vehicle type', t:'sel', o:[CMVV,'Non-commercial vehicle'], show:isVeh},
   {k:'fleetNo', l:'Company unit no.', t:'text', mono:1, show:isCo},
+  {k:'usdot', l:'USDOT no.', t:'text', mono:1, show:unitCMV},
+  {k:'carrier', l:'Motor carrier name', t:'text', span:2, show:unitCMV},
+  {k:'mcNo', l:'MC / MX no.', t:'text', mono:1, show:unitCMV},
   {k:'body', l:'Body type', t:'sel', o:BODY_TYPES},
   {k:'year', l:'Year', t:'num'},
   {k:'make', l:'Make', t:'text'},
@@ -317,35 +328,33 @@ unit: [
   {k:'dPhone', l:'Phone', t:'text'},
   {k:'licNo', l:'License no. / state', t:'text', mono:1},
   {k:'licClass', l:'License class', t:'sel', o:['Class C – standard','Class M','CDL Class A','CDL Class B','CDL Class C','Unlicensed','Unknown']},
-  {k:'endorse', l:'CDL endorsements', t:'chips', span:2, o:['H – Hazmat','N – Tank','T – Doubles/triples','X – Tank + hazmat','P – Passenger','S – School bus'], show:c=>isCMV(c)&&isCo(c)},
-  {k:'yrsExp', l:'Years driving this class', t:'num', show:isCo},
+  {k:'endorse', l:'CDL endorsements', t:'chips', span:2, o:['H – Hazmat','N – Tank','T – Doubles/triples','X – Tank + hazmat','P – Passenger','S – School bus'], show:coCMV},
   {k:'hireDate', l:'Hire date', t:'date', show:isCo},
   {k:'belt', l:'Seat belt used', t:'sel', o:YNU},
   {k:'injury', l:'Driver injury', t:'sel', o:['None','Possible','Minor','Serious','Fatal']},
   {k:'phoneUse', l:'Phone use', t:'sel', o:['None','Hands-free','Handheld','Unknown']},
   {k:'impair', l:'Impairment', t:'sel', o:['None suspected','Suspected alcohol','Suspected drugs','Fatigue','Medical event','Unknown']},
-  {h:'CMV compliance (49 CFR)', show:c=>isCMV(c)&&isCo(c)},
-  {k:'usdot', l:'USDOT no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)},
-  {k:'gvwr', l:'GVWR / GCWR (lbs)', t:'num', show:c=>isCMV(c)&&isCo(c)},
-  {k:'trailerNo', l:'Trailer no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)},
-  {k:'cargo', l:'Cargo', t:'text', show:c=>isCMV(c)&&isCo(c)},
-  {k:'hazmat', l:'Hazmat on board', t:'sel', o:YN, show:c=>isCMV(c)&&isCo(c)},
-  {k:'placard', l:'Placard / UN no.', t:'text', mono:1, show:c=>isCMV(c)&&isCo(c)&&c.u.hazmat==='Yes'},
-  {k:'hazRelease', l:'Hazmat released', t:'sel', o:YN, show:c=>isCMV(c)&&isCo(c)&&c.u.hazmat==='Yes'},
-  {k:'hos', l:'Hours of service', t:'sel', o:['Within limits','Violation found','Under review'], show:c=>isCMV(c)&&isCo(c)},
-  {k:'hrsDrive', l:'Hrs driving before crash', t:'num', show:c=>isCMV(c)&&isCo(c)},
-  {k:'hrsDuty', l:'Hrs on duty before crash', t:'num', show:c=>isCMV(c)&&isCo(c)},
-  {k:'pretrip', l:'Pre-trip inspection done', t:'sel', o:YNU, show:c=>isCMV(c)&&isCo(c)},
-  {k:'dvir', l:'DVIR defects noted', t:'text', span:2, show:c=>isCMV(c)&&isCo(c)},
-  {k:'alcTime', l:'Alcohol test date/time', t:'dt', show:c=>isCMV(c)&&isCo(c)},
-  {k:'alcResult', l:'Alcohol result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:c=>isCMV(c)&&isCo(c)},
-  {k:'drugTime', l:'Drug test date/time', t:'dt', show:c=>isCMV(c)&&isCo(c)},
-  {k:'drugResult', l:'Drug result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:c=>isCMV(c)&&isCo(c)},
-  {k:'testNotes', l:'Reason a test was late or not done', t:'text', span:4, show:c=>isCMV(c)&&isCo(c)},
-  {h:'Company post-crash testing', show:c=>!isCMV(c)&&isCo(c)},
-  {k:'coTest', l:'Testing', t:'sel', o:['Required by company policy','Not required','Pending decision'], show:c=>!isCMV(c)&&isCo(c)},
-  {k:'coTestTime', l:'Test date/time', t:'dt', show:c=>!isCMV(c)&&isCo(c)},
-  {k:'coTestResult', l:'Result', t:'sel', o:['Negative','Positive','Refusal','Pending'], show:c=>!isCMV(c)&&isCo(c)},
+  {h:'CMV compliance (49 CFR)', show:coCMV},
+  {k:'gvwr', l:'GVWR / GCWR (lbs)', t:'num', show:coCMV},
+  {k:'trailerNo', l:'Trailer no.', t:'text', mono:1, show:coCMV},
+  {k:'cargo', l:'Cargo', t:'text', show:coCMV},
+  {k:'hazmat', l:'Hazmat on board', t:'sel', o:YN, show:coCMV},
+  {k:'placard', l:'Placard / UN no.', t:'text', mono:1, show:c=>coCMV(c)&&c.u.hazmat==='Yes'},
+  {k:'hazRelease', l:'Hazmat released', t:'sel', o:YN, show:c=>coCMV(c)&&c.u.hazmat==='Yes'},
+  {k:'hos', l:'Hours of service', t:'sel', o:['Within limits','Violation found','Under review'], show:coCMV},
+  {k:'hrsDrive', l:'Hrs driving before crash', t:'num', show:coCMV},
+  {k:'hrsDuty', l:'Hrs on duty before crash', t:'num', show:coCMV},
+  {k:'pretrip', l:'Pre-trip inspection done', t:'sel', o:YNU, show:coCMV},
+  {k:'dvir', l:'DVIR defects noted', t:'text', span:2, show:coCMV},
+  {k:'alcTime', l:'Alcohol test date/time', t:'dtna', show:coCMV},
+  {k:'alcResult', l:'Alcohol result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:coCMV},
+  {k:'drugTime', l:'Drug test date/time', t:'dtna', show:coCMV},
+  {k:'drugResult', l:'Drug result', t:'sel', o:['Negative','Positive','Refusal','Not conducted','Pending'], show:coCMV},
+  {k:'testNotes', l:'Reason a test was late or not done', t:'text', span:4, show:coCMV},
+  {h:'Company post-crash testing', show:c=>isCo(c)&&!coCMV(c)},
+  {k:'coTest', l:'Testing', t:'sel', o:['Required by company policy','Not required','Pending decision'], show:c=>isCo(c)&&!coCMV(c)},
+  {k:'coTestTime', l:'Test date/time', t:'dt', show:c=>isCo(c)&&!coCMV(c)},
+  {k:'coTestResult', l:'Result', t:'sel', o:['Negative','Positive','Refusal','Pending'], show:c=>isCo(c)&&!coCMV(c)},
 ],
 witness: [
   {k:'name', l:'Name', t:'text', span:2},
@@ -399,6 +408,15 @@ review: [
   {k:'closedDate', l:'Case closed', t:'date'},
   {k:'driverAck', l:'Driver reviewed findings', t:'sel', o:['Yes','No','Refused to sign']},
   {k:'finalNotes', l:'Final notes', t:'area', span:3, rows:3},
+],
+reviewer: [
+  {k:'name', l:'Reviewer name', t:'text', span:2},
+  {k:'title', l:'Title', t:'text'},
+  {k:'role', l:'Department', t:'sel', o:['Safety','Fleet / maintenance','Operations','Human resources','Risk / insurance','Legal','Executive','Other']},
+  {k:'date', l:'Review date', t:'date'},
+  {k:'decision', l:'Review decision', t:'sel', span:2, o:['Concur with findings','Concur with changes','Do not concur','Pending']},
+  {k:'signed', l:'Signed', t:'sel', o:['Yes','No']},
+  {k:'comments', l:'Comments', t:'area', span:4, rows:2},
 ],
 action: [
   {k:'action', l:'Corrective action', t:'area', span:4, rows:2},
@@ -488,7 +506,7 @@ function blankUnit(role){return {role, damage:[], endorse:[]}}
 function defaultRoad(){return presetRoad('4way')}
 function blankState(){
   return {id:uid(), f:{caseNo:'', caseNoManual:false, fleet:'Light fleet', status:'Open', evidence:[], factors:[]},
-    units:[blankUnit(''), blankUnit('')], witnesses:[], injured:[], actions:[], property:[], attorneys:[], lhRequests:[], docs:[],
+    units:[blankUnit(''), blankUnit('')], witnesses:[], injured:[], actions:[], reviewers:[], property:[], attorneys:[], lhRequests:[], docs:[],
     diagram:{road:defaultRoad(), objects:[], notes:''}};
 }
 let S = blankState();
@@ -568,6 +586,7 @@ function cellHTML(d,base,obj,ctx){
     case 'date': c=`<input id="${id}" data-p="${p}" type="date" value="${esc(v)}">`;break;
     case 'time': c=`<input id="${id}" data-p="${p}" type="time" value="${esc(v)}">`;break;
     case 'dt': c=`<input id="${id}" data-p="${p}" type="datetime-local" value="${esc(v)}">`;break;
+    case 'dtna': {const na=v==='NA'; c=`<div class="na-row"><input id="${id}" data-p="${p}" type="datetime-local" value="${na?'':esc(v)}" ${na?'disabled':''} aria-label="${esc(d.l)}"><button type="button" class="btn sm" data-na="${p}" aria-pressed="${na}">${na?'✓ ':''}Not applicable</button></div>`;break;}
     case 'calc': return `<div class="cell calc${sp}"><span class="lbl">${esc(d.l)}</span><output id="${id}" data-calc="${base}${d.k}">${esc(d.calc(ctx))}</output></div>`;
     case 'list': {const arr=Array.isArray(v)&&v.length?v:[''];
       return `<div class="cell${sp}"><span class="lbl" id="${id}-l">${esc(d.l)}</span><div class="mlist" role="group" aria-labelledby="${id}-l">${arr.map((x,i)=>`<div class="mrow"><span class="mno">${i+1}.</span><input id="${id}_${i}" data-p="${p}.${i}" type="text" value="${esc(x)}" autocomplete="off" aria-label="${esc(d.l)} ${i+1}">${arr.length>1?`<button type="button" class="btn sm" data-listdel="${p}" data-i="${i}" aria-label="Remove ${esc(d.l)} ${i+1}">✕</button>`:''}</div>`).join('')}<button type="button" class="btn sm" data-listadd="${p}">${esc(d.add||'+ Add')}</button></div></div>`;}
@@ -658,6 +677,8 @@ function renderTab(){
     if(!S.actions.length) h+=`<section class="sheet"><div class="band">Corrective actions</div><div class="empty">No corrective actions yet.</div></section>`;
     h+=`<div class="addrow"><button class="btn" data-add="actions">+ Add corrective action</button></div>`;
     h+=schemaHTML(SCHEMA.review,'f.',S.f,ctx);
+    h+=repeatHTML('reviewers',SCHEMA.reviewer,(r,i)=>`Additional reviewer ${i+1}${r.name?' · '+esc(r.name):''}`);
+    h+=`<div class="addrow"><button class="btn" data-add="reviewers">+ Add reviewer</button></div>`;
   }
   if(tab==='diagram'){ v.innerHTML=diagramShell(); Dg.mount(); }
   else { Dg.unmount(); v.innerHTML=h; if(tab==='docs') loadThumbs(); }
@@ -719,6 +740,8 @@ view.addEventListener('click',e=>{
   const chip=e.target.closest('[data-chip]');
   if(chip){const p=chip.dataset.chip, val=chip.dataset.v; let a=getP(S,p); if(!Array.isArray(a)){a=[];setP(S,p,a)}
     const i=a.indexOf(val); i<0?a.push(val):a.splice(i,1); chip.setAttribute('aria-pressed',i<0); touch(); return;}
+  const nab=e.target.closest('[data-na]');
+  if(nab){const p=nab.dataset.na; setP(S,p,getP(S,p)==='NA'?'':'NA'); touch(); renderTab(); return;}
   const la=e.target.closest('[data-listadd]');
   if(la){const p=la.dataset.listadd;let a=getP(S,p);if(!Array.isArray(a)||!a.length){a=[''];setP(S,p,a)}a.push('');touch();renderTab();
     const el=document.getElementById('f-'+p.replace(/\./g,'_')+'_'+(a.length-1)); el&&el.focus(); return;}
@@ -772,10 +795,19 @@ const CAT={
   trailer:{n:'Trailer 53′',grp:'Vehicles',w:53,h:8.5,col:true,veh:true},
   tanker:{n:'Tank trailer',grp:'Vehicles',w:43,h:8.5,col:true,veh:true},
   tanktruck:{n:'Tank truck',grp:'Vehicles',w:30,h:8.4,col:true,veh:true},
+  flatbed:{n:'Flatbed truck',grp:'Vehicles',w:30,h:8.5,col:true,veh:true},
+  flattrailer:{n:'Flatbed trailer',grp:'Vehicles',w:48,h:8.5,col:true,veh:true},
   bus:{n:'Bus',grp:'Vehicles',w:40,h:8.5,col:true,veh:true},
   moto:{n:'Motorcycle',grp:'Vehicles',w:7,h:2.6,col:true,veh:true},
   bike:{n:'Bicycle',grp:'Vehicles',w:6,h:2,col:true,veh:true},
   ped:{n:'Pedestrian',grp:'Vehicles',w:2.2,h:2.6,col:true,veh:true},
+  farmtractor:{n:'Farm tractor',grp:'Farm equipment',w:15,h:7.5,col:true,veh:true,def:'#2e8b57'},
+  combine:{n:'Combine',grp:'Farm equipment',w:32,h:24,col:true,veh:true,def:'#c0392b'},
+  implement:{n:'Disc / plow',grp:'Farm equipment',w:10,h:16,col:true,def:'#e3a21a'},
+  sprayer:{n:'Field sprayer',grp:'Farm equipment',w:16,h:40,col:true,def:'#e3a21a'},
+  wagon:{n:'Grain wagon',grp:'Farm equipment',w:18,h:9,col:true,def:'#c0392b'},
+  baler:{n:'Hay baler',grp:'Farm equipment',w:14,h:9,col:true,def:'#c0392b'},
+  bale:{n:'Round bale',grp:'Farm equipment',w:5,h:5},
   tag1:{n:'UNIT 1',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 1',def:'#1d2328'},
   tag2:{n:'UNIT 2',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 2',def:'#1d2328'},
   tag3:{n:'UNIT 3',grp:'Unit labels',w:20,h:6,col:true,tag:true,text:'UNIT 3',def:'#1d2328'},
@@ -809,7 +841,7 @@ const CAT={
   measure:{n:'Measurement',grp:'Marks & evidence',w:50,h:2},
   text:{n:'Text label',grp:'Marks & evidence',w:30,h:5},
 };
-const BODY_TO_OBJ={'Sedan':'sedan','SUV':'suv','Pickup':'pickup','Cargo van':'van','Passenger van':'van','Box truck (non-CDL)':'box','Tractor-trailer':'tractor','Tractor (bobtail)':'tractor','Straight truck':'box','Tanker':'tractor','Tank truck (straight)':'tanktruck','Flatbed':'box','Dump truck':'box','Service / utility truck':'pickup','Bus':'bus','Motorcycle':'moto','Bicycle':'bike','Pedestrian':'ped','Other':'sedan'};
+const BODY_TO_OBJ={'Sedan':'sedan','SUV':'suv','Pickup':'pickup','Cargo van':'van','Passenger van':'van','Box truck (non-CDL)':'box','Tractor-trailer':'tractor','Tractor (bobtail)':'tractor','Straight truck':'box','Tanker':'tractor','Tank truck (straight)':'tanktruck','Flatbed':'flatbed','Farm tractor':'farmtractor','Farm equipment / implement':'implement','Dump truck':'box','Service / utility truck':'pickup','Bus':'bus','Motorcycle':'moto','Bicycle':'bike','Pedestrian':'ped','Other':'sedan'};
 
 function rng(seed){let s=0;for(const ch of String(seed))s=(s*31+ch.charCodeAt(0))>>>0;return()=>((s=(s*1664525+1013904223)>>>0)/4294967296)}
 const n1=v=>Math.round(v*10)/10;
@@ -912,6 +944,63 @@ function drawObj(o){
     case 'skid': {const R=rng(o.id);let s='';for(const y of [-h*0.65,h*0.65]){let d=`M${-w} ${n1(y)}`;for(let x=-w+8;x<=w;x+=8)d+=` L${n1(x)} ${n1(y+(R()-.5)*1.2)}`;s+=`<path d="${d}" fill="none" stroke="#1a1a1a" stroke-width="${n1(Math.max(2,H*0.18))}" stroke-linecap="round" opacity=".72"/>`}return s;}
     case 'debris': {const R=rng(o.id);let s='';for(let i=0;i<22;i++){const x=(R()-.5)*W,y=(R()-.5)*H;s+=R()>.5?`<circle cx="${n1(x)}" cy="${n1(y)}" r="${n1(.6+R()*1.4)}" fill="#3a3a3a"/>`:`<rect x="${n1(x)}" y="${n1(y)}" width="${n1(1+R()*2.5)}" height="${n1(1+R()*2)}" fill="#8a8f94" transform="rotate(${Math.round(R()*90)} ${n1(x)} ${n1(y)})"/>`}return s;}
     case 'fluid': return `<path d="M${-w} 0 C${-w} ${-h} ${n1(-w*0.2)} ${-h*1.1} ${n1(w*0.3)} ${n1(-h*0.8)} C${w} ${n1(-h*0.6)} ${w} ${n1(h*0.7)} ${n1(w*0.2)} ${h} C${n1(-w*0.4)} ${n1(h*1.1)} ${-w} ${n1(h*0.6)} ${-w} 0Z" fill="#2c2b3a" opacity=".55"/>`;
+    case 'flatbed': {
+      const cab=W*0.22, dk=W-cab-2;
+      let sdeck=`<rect x="${-w}" y="${-h}" width="${n1(dk)}" height="${H}" fill="#8f8270" stroke="${k}"/>`;
+      for(let y=-h+3;y<h;y+=3.2) sdeck+=`<line x1="${-w}" y1="${n1(y)}" x2="${n1(-w+dk)}" y2="${n1(y)}" stroke="#6f6353" stroke-width=".5"/>`;
+      for(let x=-w+4;x<-w+dk-2;x+=10) sdeck+=`<rect x="${n1(x)}" y="${n1(-h-1)}" width="2" height="2" fill="#333"/><rect x="${n1(x)}" y="${n1(h-1)}" width="2" height="2" fill="#333"/>`;
+      return wheel(w*0.68,-h,W*0.09,3)+wheel(w*0.68,h,W*0.09,3)+wheel(-w*0.5,-h,W*0.12,3)+wheel(-w*0.5,h,W*0.12,3)+sdeck
+      +`<rect x="${n1(w-cab)}" y="${n1(-h*0.92)}" width="${n1(cab)}" height="${n1(H*0.92)}" rx="4" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w-cab*0.42)}" y="${n1(-h*0.78)}" width="${n1(cab*0.16)}" height="${n1(H*0.78)}" fill="${glass}"/>`
+      +`<rect x="${n1(w-cab-2.5)}" y="${n1(-h*0.85)}" width="2" height="${n1(H*0.85)}" fill="#333"/>`;
+    }
+    case 'flattrailer': {
+      let sd=wheel(-w*0.74,-h,W*0.05,3)+wheel(-w*0.74,h,W*0.05,3)+wheel(-w*0.86,-h,W*0.05,3)+wheel(-w*0.86,h,W*0.05,3)
+        +`<rect x="${-w}" y="${-h}" width="${W}" height="${H}" fill="#8f8270" stroke="${k}"/>`;
+      for(let y=-h+3;y<h;y+=3.2) sd+=`<line x1="${-w}" y1="${n1(y)}" x2="${w}" y2="${n1(y)}" stroke="#6f6353" stroke-width=".5"/>`;
+      for(let x=-w+5;x<w-3;x+=12) sd+=`<rect x="${n1(x)}" y="${n1(-h-1)}" width="2" height="2" fill="#333"/><rect x="${n1(x)}" y="${n1(h-1)}" width="2" height="2" fill="#333"/>`;
+      return sd+`<rect x="${-w}" y="${-h}" width="${W}" height="2" fill="${c}" opacity=".9"/><rect x="${-w}" y="${n1(h-2)}" width="${W}" height="2" fill="${c}" opacity=".9"/><circle cx="${n1(w-6)}" cy="0" r="1.5" fill="#333"/>`;
+    }
+    case 'farmtractor': {
+      const rw=W*0.34, rh=H*0.26, fw=W*0.17, fh=H*0.16;
+      return `<rect x="${n1(-w*0.62-rw/2)}" y="${n1(-h)}" width="${n1(rw)}" height="${n1(rh)}" rx="2" fill="#111"/><rect x="${n1(-w*0.62-rw/2)}" y="${n1(h-rh)}" width="${n1(rw)}" height="${n1(rh)}" rx="2" fill="#111"/>`
+      +`<rect x="${n1(w*0.62-fw/2)}" y="${n1(-h*0.72)}" width="${n1(fw)}" height="${n1(fh)}" rx="1.5" fill="#111"/><rect x="${n1(w*0.62-fw/2)}" y="${n1(h*0.72-fh)}" width="${n1(fw)}" height="${n1(fh)}" rx="1.5" fill="#111"/>`
+      +`<rect x="${n1(-w*0.2)}" y="${n1(-h*0.3)}" width="${n1(W*0.68)}" height="${n1(H*0.6)}" rx="3" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(-w*0.95)}" y="${n1(-h*0.5)}" width="${n1(W*0.42)}" height="${n1(H)}" rx="3" fill="${shade(c,-12)}" stroke="${k}"/>`
+      +`<rect x="${n1(-w*0.88)}" y="${n1(-h*0.38)}" width="${n1(W*0.3)}" height="${n1(H*0.76)}" rx="2" fill="${glass}" opacity=".85"/>`
+      +`<circle cx="${n1(w*0.35)}" cy="${n1(-h*0.1)}" r="1.3" fill="#333"/>`;
+    }
+    case 'combine': {
+      const hd=W*0.14, bodyH=H*0.42;
+      let sc=`<rect x="${n1(w-hd)}" y="${-h}" width="${n1(hd)}" height="${H}" fill="${shade(c,-20)}" stroke="${k}"/>`;
+      for(let y=-h+4;y<h;y+=6) sc+=`<line x1="${n1(w-hd)}" y1="${n1(y)}" x2="${w}" y2="${n1(y)}" stroke="${shade(c,-50)}" stroke-width=".8"/>`;
+      return wheel(w*0.3,-bodyH/2-2,W*0.14,6)+wheel(w*0.3,bodyH/2+2,W*0.14,6)+wheel(-w*0.6,-bodyH/2-1,W*0.08,4)+wheel(-w*0.6,bodyH/2+1,W*0.08,4)+sc
+      +`<rect x="${-w}" y="${n1(-bodyH/2)}" width="${n1(W-hd)}" height="${n1(bodyH)}" rx="4" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w-hd-W*0.18)}" y="${n1(-bodyH*0.35)}" width="${n1(W*0.14)}" height="${n1(bodyH*0.7)}" rx="2" fill="${glass}"/>`
+      +`<line x1="${n1(-w*0.2)}" y1="${n1(-bodyH/2)}" x2="${n1(w*0.25)}" y2="${n1(-h*0.85)}" stroke="${k}" stroke-width="2.4"/>`;
+    }
+    case 'implement': {
+      let si=`<line x1="${w}" y1="0" x2="${n1(-w*0.2)}" y2="0" stroke="#333" stroke-width="2"/><rect x="${n1(-w)}" y="${-h}" width="${n1(W*0.5)}" height="${H}" fill="none" stroke="${c}" stroke-width="2.4"/>`;
+      for(const xx of [-w*0.85,-w*0.6]) for(let y=-h+3;y<h-1;y+=5) si+=`<ellipse cx="${n1(xx)}" cy="${n1(y)}" rx="1.4" ry="2.4" fill="#555" transform="rotate(20 ${n1(xx)} ${n1(y)})"/>`;
+      return si;
+    }
+    case 'sprayer': {
+      let ss=`<rect x="${-w}" y="${n1(-h)}" width="2.5" height="${H}" fill="${c}" stroke="${k}" stroke-width=".6"/>`;
+      for(let y=-h+4;y<h;y+=8) ss+=`<circle cx="${n1(-w+1.2)}" cy="${n1(y)}" r="1" fill="#333"/>`;
+      return ss+`<line x1="${w}" y1="0" x2="${n1(w-6)}" y2="0" stroke="#333" stroke-width="2"/>`+wheel(-w*0.2,-5.5,W*0.18,3)+wheel(-w*0.2,5.5,W*0.18,3)
+        +`<ellipse cx="${n1(-w*0.2)}" cy="0" rx="${n1(w*0.6)}" ry="5" fill="#e9e9e4" stroke="${k}"/>`;
+    }
+    case 'wagon': {
+      return wheel(w*0.35,-h,W*0.14,3)+wheel(w*0.35,h,W*0.14,3)+wheel(-w*0.45,-h,W*0.14,3)+wheel(-w*0.45,h,W*0.14,3)
+      +`<line x1="${w}" y1="0" x2="${n1(w+8)}" y2="0" stroke="#333" stroke-width="2"/><rect x="${-w}" y="${-h}" width="${W}" height="${H}" rx="2" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(-w+3)}" y="${n1(-h+3)}" width="${n1(W-6)}" height="${n1(H-6)}" fill="${shade(c,-30)}"/><rect x="${n1(-w+5)}" y="${n1(-h+5)}" width="${n1(W-10)}" height="${n1(H-10)}" fill="#d9b25c" opacity=".85"/>`;
+    }
+    case 'baler': {
+      return wheel(-w*0.1,-h,W*0.18,3)+wheel(-w*0.1,h,W*0.18,3)+`<line x1="${w}" y1="${n1(-h*0.5)}" x2="${n1(w+8)}" y2="${n1(-h*0.5)}" stroke="#333" stroke-width="2"/>`
+      +`<rect x="${-w}" y="${n1(-h*0.85)}" width="${n1(W*0.8)}" height="${n1(H*0.85)}" rx="5" fill="${c}" stroke="${k}"/>`
+      +`<rect x="${n1(w*0.55)}" y="${-h}" width="${n1(W*0.2)}" height="${H}" fill="${shade(c,-30)}" stroke="${k}"/>`;
+    }
+    case 'bale': {const r=Math.min(w,h);return `<circle r="${n1(r)}" fill="#d9b25c" stroke="#9a7a32"/><circle r="${n1(r*0.6)}" fill="none" stroke="#b8933f" stroke-width=".8"/><circle r="${n1(r*0.25)}" fill="none" stroke="#b8933f" stroke-width=".8"/>`;}
     case 'tanktruck': {
       const cab=W*0.2;
       return wheel(w*0.7,-h,W*0.08,3)+wheel(w*0.7,h,W*0.08,3)+wheel(-w*0.42,-h,W*0.1,3)+wheel(-w*0.42,h,W*0.1,3)+wheel(-w*0.7,-h,W*0.1,3)+wheel(-w*0.7,h,W*0.1,3)
@@ -1087,7 +1176,7 @@ const Dg={
   add(t,x,y){
     const c=CAT[t]; this.snapshot();
     const vehCount=this.D.objects.filter(o=>CAT[o.t]?.veh).length;
-    const o={id:uid(),t,x:x??(this.vb.x+this.vb.w/2),y:y??(this.vb.y+this.vb.h/2),rot:0,w:c.w,h:c.h,label:c.veh&&t!=='trailer'&&t!=='tanker'?'Unit '+(vehCount+1):'',color:c.def||(c.col?(c.veh?VCOL[vehCount%VCOL.length]:'#0b57d0'):'')};
+    const o={id:uid(),t,x:x??(this.vb.x+this.vb.w/2),y:y??(this.vb.y+this.vb.h/2),rot:0,w:c.w,h:c.h,label:c.veh&&t!=='trailer'&&t!=='tanker'&&t!=='flattrailer'?'Unit '+(vehCount+1):'',color:c.def||(c.col?(c.veh?VCOL[vehCount%VCOL.length]:'#0b57d0'):'')};
     if(c.tag) o.text=c.text;
     if(t==='text') o.text='Label';
     if(t==='speed') o.text=S.f.speedLimit||'35';
@@ -1371,7 +1460,8 @@ function fmtVal(d,v){
   if(Array.isArray(v)) return d.t==='list'?v.filter(Boolean).map((x,i)=>`${i+1}. ${x}`).join('\n'):v.join(' · ');
   if(d.t==='date'&&/^\d{4}-\d{2}-\d{2}$/.test(v)){const [y,m,dd]=v.split('-');return `${m}/${dd}/${y}`}
   if(d.t==='time'&&/^\d{2}:\d{2}/.test(v)){let [h,mi]=v.split(':').map(Number);const ap=h>=12?'PM':'AM';h=h%12||12;return `${h}:${String(mi).padStart(2,'0')} ${ap}`}
-  if(d.t==='dt'&&/T/.test(v)){const [a,b]=v.split('T');return fmtVal({t:'date'},a)+' '+fmtVal({t:'time'},b)}
+  if(v==='NA'&&(d.t==='dtna'||d.t==='dt')) return 'Not applicable';
+  if((d.t==='dt'||d.t==='dtna')&&/T/.test(v)){const [a,b]=v.split('T');return fmtVal({t:'date'},a)+' '+fmtVal({t:'time'},b)}
   if(d.t==='num'&&/^(cost|estimate)/.test(d.k)&&!isNaN(+v)) return money(+v);
   return String(v);
 }
@@ -1449,6 +1539,7 @@ async function exportDOCX(){
     body.push(sectionTitle('Analysis',true), ...blocks(SCHEMA.analysis,f,ctx));
     body.push(sectionTitle('Corrective actions'), ...list('actions',SCHEMA.action,(a,i)=>`Corrective action ${i+1}${a.status?' · '+a.status:''}`,'No corrective actions recorded.'));
     body.push(sectionTitle('Costs & sign-off'), ...blocks(SCHEMA.review,f,ctx));
+    if(S.reviewers.length){ body.push(gap(120)); S.reviewers.forEach((r,i)=>{ body.push(band(`Additional reviewer ${i+1}${r.name?' · '+r.name:''}`)); body.push(...blocks(SCHEMA.reviewer,r,{s:S,u:r},true)); body.push(gap(120)); }); }
     {
       body.push(new Paragraph({pageBreakBefore:true,spacing:{after:120},keepNext:true,children:[run('Litigation hold',{bold:true,size:30})]}));
       const cut=SCHEMA.legal.findIndex(d=>d.h==='Items to preserve');
@@ -1610,7 +1701,7 @@ async function importCase(file){
     toast(existing?'Case file opened — replaced the saved copy of this case.':'Case file opened.');
   }catch(err){ toast(err?.message||'That file could not be opened.'); }
 }
-function valStr(v){return Array.isArray(v)?v.join(', '):(v??'')}
+function valStr(v){return Array.isArray(v)?v.join(', '):v==='NA'?'Not applicable':(v??'')}
 async function exportXLSX(){
   if(!window.XLSX){toast('The Excel library did not load. Check your connection and reload.');return}
   const wb=XLSX.utils.book_new(), d=determination();
@@ -1626,7 +1717,7 @@ async function exportXLSX(){
   for(const x of SCHEMA.unit){ if(x.h){uRows.push([x.h.toUpperCase()]);continue} uRows.push([x.l,...S.units.map(u=>valStr(u[x.k]))]) }
   const ws2=XLSX.utils.aoa_to_sheet(uRows); ws2['!cols']=[{wch:30},...S.units.map(()=>({wch:26}))]; XLSX.utils.book_append_sheet(wb,ws2,'Vehicles & Drivers');
   const table=(defs,list,name)=>{const cols=defs.filter(x=>!x.h);const rows=[['#',...cols.map(x=>x.l)],...list.map((it,i)=>[i+1,...cols.map(x=>valStr(it[x.k]))])];const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=[{wch:4},...cols.map(x=>({wch:x.t==='area'?50:22}))];XLSX.utils.book_append_sheet(wb,ws,name)};
-  table(SCHEMA.witness,S.witnesses,'Witnesses'); table(SCHEMA.injured,S.injured,'Injuries'); table(SCHEMA.action,S.actions,'Corrective Actions'); table(SCHEMA.property,S.property,'Third-Party Property'); table(SCHEMA.attorney,S.attorneys,'Attorneys'); table(SCHEMA.lhRequest,S.lhRequests,'Attorney Requests');
+  table(SCHEMA.witness,S.witnesses,'Witnesses'); table(SCHEMA.injured,S.injured,'Injuries'); table(SCHEMA.action,S.actions,'Corrective Actions'); table(SCHEMA.reviewer,S.reviewers,'Reviewers'); table(SCHEMA.property,S.property,'Third-Party Property'); table(SCHEMA.attorney,S.attorneys,'Attorneys'); table(SCHEMA.lhRequest,S.lhRequests,'Attorney Requests');
   { const rows=[['#','Type','Document','Marking','Description','Size','Added','Link']];
     S.docs.forEach((d,i)=>rows.push([i+1,d.cat,d.name,d.mark||'',d.desc||'',d.stored?fmtSize(d.size):'',new Date(d.added).toLocaleDateString(),d.link||'']));
     const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:26},{wch:36},{wch:22},{wch:44},{wch:10},{wch:12},{wch:40}]; XLSX.utils.book_append_sheet(wb,ws,'Documents'); }
@@ -1675,7 +1766,7 @@ function openCase(id){
   if(S.f.caseNoManual===undefined) S.f.caseNoManual=!!S.f.caseNo;
   if(S.f.citations&&!Array.isArray(S.f.citations)&&typeof S.f.citations==='object') S.f.citations=Object.keys(S.f.citations).sort((a,b)=>a-b).map(k=>S.f.citations[k]);
   if(S.f.citationDetail && !Array.isArray(S.f.citations)){S.f.citations=[S.f.citationDetail];delete S.f.citationDetail}
-  S.witnesses??=[];S.injured??=[];S.actions??=[];S.property??=[];S.attorneys??=[];S.lhRequests??=[];S.docs??=[];S.units??=[];S.diagram??={road:defaultRoad(),objects:[],notes:''};
+  S.witnesses??=[];S.injured??=[];S.actions??=[];S.reviewers??=[];S.property??=[];S.attorneys??=[];S.lhRequests??=[];S.docs??=[];S.units??=[];S.diagram??={road:defaultRoad(),objects:[],notes:''};
   dirty=false; everSaved=true; userTouched=false; lastSaved=new Date(c.updatedAt); Dg.sel=null; Dg.undo=[]; Dg.redo=[];
   setSaveState(); renderTab(); closeDrawer();
 }
